@@ -1,0 +1,334 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
+from typing import Any, Protocol
+
+import numpy as np
+
+from .config import ModelConfig
+from .schemas import FeatureBundle, NormalizedROI
+
+
+class InferenceSession(Protocol):
+    def infer(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return global embedding and patch tokens."""
+
+
+class ExportableSession(Protocol):
+    def export_onnx(
+        self,
+        output_dir: Path,
+        input_size: tuple[int, int],
+    ) -> dict[str, Any]:
+        """Export embedding and patch-token paths to ONNX artifacts."""
+
+
+@dataclass
+class BaseFeatureBackend:
+    config: ModelConfig
+    session: InferenceSession | None = None
+    backend_name: str = "base"
+
+    def extract(self, roi: NormalizedROI) -> FeatureBundle:
+        batch = preprocess_roi(roi.image, self.config.input_size)
+        session = self.session or self._load_default_session()
+        embedding, patch_tokens = session.infer(batch)
+        return FeatureBundle(
+            global_embedding=l2_normalize(np.asarray(embedding, dtype=np.float32).reshape(-1)),
+            patch_tokens=np.asarray(patch_tokens, dtype=np.float32),
+            backend=self.backend_name,
+        )
+
+    def cache_key(self, roi: NormalizedROI) -> str:
+        digest = sha256()
+        digest.update(roi.image.tobytes())
+        digest.update(self.backend_name.encode("utf-8"))
+        digest.update(str(self.config.input_size).encode("utf-8"))
+        return digest.hexdigest()
+
+    def _load_default_session(self) -> InferenceSession:
+        raise RuntimeError(f"{self.backend_name} backend requires an explicit inference session")
+
+
+@dataclass
+class PyTorchFeatureBackend(BaseFeatureBackend):
+    backend_name: str = "pytorch"
+
+
+@dataclass
+class RKNNFeatureBackend(BaseFeatureBackend):
+    backend_name: str = "rknn"
+
+
+class TorchModuleSession:
+    def __init__(self, module, device: str = "cpu") -> None:
+        self.module = module
+        self.device = device
+
+    def infer(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        import torch
+
+        self.module.eval()
+        tensor = torch.from_numpy(batch).to(self.device)
+        with torch.no_grad():
+            outputs = _run_feature_forward(self.module, tensor)
+        embedding, patch_tokens = _unpack_model_outputs(outputs)
+        return (
+            embedding.detach().cpu().numpy().reshape(-1),
+            patch_tokens.detach().cpu().numpy().reshape(-1, patch_tokens.shape[-1]),
+        )
+
+    def export_onnx(self, output_dir: Path, input_size: tuple[int, int]) -> dict[str, Any]:
+        import torch
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        embedding_path = output_dir / "embedding.onnx"
+        patch_tokens_path = output_dir / "patch_tokens.onnx"
+        sample = torch.randn(1, 3, input_size[0], input_size[1], dtype=torch.float32)
+
+        embedding_wrapper = _EmbeddingExportWrapper(self.module).eval()
+        patch_wrapper = _PatchTokenExportWrapper(self.module).eval()
+
+        torch.onnx.export(
+            embedding_wrapper,
+            sample,
+            embedding_path,
+            input_names=["pixel_values"],
+            output_names=["global_embedding"],
+            opset_version=18,
+            dynamic_axes={"pixel_values": {0: "batch"}, "global_embedding": {0: "batch"}},
+        )
+        torch.onnx.export(
+            patch_wrapper,
+            sample,
+            patch_tokens_path,
+            input_names=["pixel_values"],
+            output_names=["patch_tokens"],
+            opset_version=18,
+            dynamic_axes={"pixel_values": {0: "batch"}, "patch_tokens": {0: "batch"}},
+        )
+        return {
+            "status": "ready",
+            "embedding_onnx": embedding_path,
+            "patch_tokens_onnx": patch_tokens_path,
+            "notes": ["torch_onnx_export_complete"],
+        }
+
+
+class StatisticsFeatureSession:
+    def infer(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        channels = batch.mean(axis=(2, 3)).reshape(-1).astype(np.float32)
+        quadrants = np.stack(
+            [
+                batch[:, :, : batch.shape[2] // 2, : batch.shape[3] // 2].mean(axis=(2, 3)).reshape(-1),
+                batch[:, :, : batch.shape[2] // 2, batch.shape[3] // 2 :].mean(axis=(2, 3)).reshape(-1),
+                batch[:, :, batch.shape[2] // 2 :, : batch.shape[3] // 2].mean(axis=(2, 3)).reshape(-1),
+                batch[:, :, batch.shape[2] // 2 :, batch.shape[3] // 2 :].mean(axis=(2, 3)).reshape(-1),
+            ]
+        ).astype(np.float32)
+        return channels, quadrants
+
+
+def create_backend(backend_name: str, config: ModelConfig, session: InferenceSession | None = None) -> BaseFeatureBackend:
+    active_session = session or _build_default_session(config)
+    if backend_name == "pytorch":
+        return PyTorchFeatureBackend(config=config, session=active_session)
+    if backend_name == "rknn":
+        return RKNNFeatureBackend(config=config, session=active_session)
+    raise ValueError(f"Unsupported backend: {backend_name}")
+
+
+def preprocess_roi(image: np.ndarray, output_size: tuple[int, int]) -> np.ndarray:
+    height, width = output_size
+    if image.shape[:2] != (height, width):
+        from PIL import Image
+
+        resized = Image.fromarray(image).resize((width, height), Image.Resampling.BILINEAR)
+        image = np.asarray(resized)
+    normalized = image.astype(np.float32) / 255.0
+    chw = np.transpose(normalized, (2, 0, 1))
+    return chw[None, ...]
+
+
+def l2_normalize(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    if norm == 0.0:
+        return vector
+    return vector / norm
+
+
+def save_feature_cache(path: Path, bundle: FeatureBundle) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        global_embedding=bundle.global_embedding,
+        patch_tokens=bundle.patch_tokens,
+        backend=bundle.backend,
+    )
+
+
+def load_feature_cache(path: Path) -> FeatureBundle:
+    with np.load(path, allow_pickle=False) as data:
+        return FeatureBundle(
+            global_embedding=data["global_embedding"].astype(np.float32),
+            patch_tokens=data["patch_tokens"].astype(np.float32),
+            backend=str(data["backend"]),
+        )
+
+
+def export_backend_to_onnx(backend: BaseFeatureBackend, output_dir: Path) -> dict[str, Any]:
+    session = backend.session or backend._load_default_session()
+    if not hasattr(session, "export_onnx"):
+        return {
+            "status": "blocked",
+            "embedding_onnx": None,
+            "patch_tokens_onnx": None,
+            "notes": [f"session_not_exportable:{type(session).__name__}"],
+        }
+    return session.export_onnx(output_dir, backend.config.input_size)
+
+
+def _unpack_model_outputs(outputs):
+    if isinstance(outputs, tuple) and len(outputs) == 2:
+        return outputs
+    if hasattr(outputs, "ndim") and getattr(outputs, "ndim", None) == 2:
+        return outputs, outputs.unsqueeze(1)
+    if isinstance(outputs, dict):
+        if "x_norm_clstoken" in outputs and "x_norm_patchtokens" in outputs:
+            return outputs["x_norm_clstoken"], outputs["x_norm_patchtokens"]
+        if "embedding" in outputs and "patch_tokens" in outputs:
+            return outputs["embedding"], outputs["patch_tokens"]
+        if "pooler_output" in outputs and "last_hidden_state" in outputs:
+            hidden = outputs["last_hidden_state"]
+            return outputs["pooler_output"], hidden[:, 1:, :]
+    if hasattr(outputs, "pooler_output") and hasattr(outputs, "last_hidden_state"):
+        hidden = outputs.last_hidden_state
+        return outputs.pooler_output, hidden[:, 1:, :]
+    raise ValueError("Unsupported model output format for feature extraction")
+
+
+class _EmbeddingExportWrapper:
+    def __new__(cls, module):
+        import torch
+
+        class _Wrapped(torch.nn.Module):
+            def __init__(self, wrapped_module) -> None:
+                super().__init__()
+                self.module = wrapped_module
+
+            def forward(self, pixel_values):
+                embedding, _ = _unpack_model_outputs(_run_feature_forward(self.module, pixel_values))
+                return embedding
+
+        return _Wrapped(module)
+
+
+class _PatchTokenExportWrapper:
+    def __new__(cls, module):
+        import torch
+
+        class _Wrapped(torch.nn.Module):
+            def __init__(self, wrapped_module) -> None:
+                super().__init__()
+                self.module = wrapped_module
+
+            def forward(self, pixel_values):
+                _, patch_tokens = _unpack_model_outputs(_run_feature_forward(self.module, pixel_values))
+                return patch_tokens
+
+        return _Wrapped(module)
+
+
+def _build_default_session(config: ModelConfig) -> InferenceSession:
+    if config.provider == "statistics":
+        return StatisticsFeatureSession()
+    if config.provider == "huggingface":
+        return _load_huggingface_session(config)
+    if config.provider == "torchhub":
+        return _load_torchhub_session(config)
+    raise ValueError(f"Unsupported provider: {config.provider}")
+
+
+def _load_huggingface_session(config: ModelConfig) -> TorchModuleSession:
+    from transformers import AutoModel
+
+    model = AutoModel.from_pretrained(config.model_name)
+    return TorchModuleSession(module=model, device=config.device)
+
+
+def _load_torchhub_session(config: ModelConfig) -> TorchModuleSession:
+    import torch
+
+    repo_dir = _resolve_repo_dir(config)
+    weights_path = _resolve_weights_path(config)
+    hub_name = _resolve_torchhub_entry(config.model_name)
+    module = torch.hub.load(
+        str(repo_dir),
+        hub_name,
+        source="local",
+        weights=str(weights_path),
+    )
+    return TorchModuleSession(module=module, device=config.device)
+
+
+def _resolve_repo_dir(config: ModelConfig) -> Path:
+    if config.repo_dir is not None:
+        return config.repo_dir
+    candidates = [
+        _project_root() / "vendor" / "dinov3",
+        _project_root() / "third_party" / "dinov3",
+        _repository_root() / "vendor" / "dinov3",
+        _repository_root() / "third_party" / "dinov3",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("DINOv3 repo dir not found; pass --repo-dir or vendor the official repo locally")
+
+
+def _resolve_weights_path(config: ModelConfig) -> Path:
+    hub_name = _resolve_torchhub_entry(config.model_name)
+    weights_dir = config.weights_dir or _find_weights_dir()
+    pattern = f"{hub_name}_pretrain_lvd1689m-*.pth"
+    matches = sorted(weights_dir.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"No weights matching {pattern} under {weights_dir}")
+    return matches[0]
+
+
+def _find_weights_dir() -> Path:
+    candidates = [
+        _project_root() / "models",
+        _repository_root() / "models",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("Model weights directory not found; pass --weights-dir explicitly")
+
+
+def _resolve_torchhub_entry(model_name: str) -> str:
+    normalized = model_name.replace("-", "_").lower()
+    if normalized in {"dinov3_vits16", "dinov3_vits16plus"}:
+        return normalized
+    if "vits16plus" in normalized:
+        return "dinov3_vits16plus"
+    if "vits16" in normalized:
+        return "dinov3_vits16"
+    raise ValueError(f"Unable to infer torchhub entry from model_name: {model_name}")
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
+def _run_feature_forward(module, pixel_values):
+    if hasattr(module, "forward_features"):
+        return module.forward_features(pixel_values)
+    return module(pixel_values)

@@ -1,6 +1,5 @@
-def main():
-    print("Hello from object-classifier!")
+from object_classifier.cli import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
