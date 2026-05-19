@@ -1,7 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
 [project]
 name = "object-classifier"
 version = "0.1.0"
-description = "Add your description here"
+description = "Closed-loop SKU classification pipeline with ROI, retrieval, rerank, and manual review."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "numpy>=2.2,<3",
+  "pillow>=11.2,<12",
+]
+
+[project.optional-dependencies]
+index = [
+  "faiss-cpu>=1.11,<2",
+]
+pytorch = [
+  "torch>=2.7,<3",
+  "torchvision>=0.22,<0.23",
+]
+huggingface = [
+  "transformers>=4.57,<5",
+  "huggingface-hub>=0.34,<1",
+]
+export = [
+  "onnx>=1.18,<2",
+]
+vision = [
+  "opencv-python-headless>=4.11,<5",
+]
+
+[project.scripts]
+object-classifier = "object_classifier.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/object_classifier"]
