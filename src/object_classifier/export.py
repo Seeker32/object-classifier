@@ -8,6 +8,9 @@ from .features import BaseFeatureBackend, export_backend_to_onnx
 from .schemas import ExportArtifacts
 
 
+DEFAULT_RKNN_INPUT_SIZE = (224, 224)
+
+
 def export_onnx_artifacts(
     output_dir: Path,
     backend: BaseFeatureBackend | None = None,
@@ -88,6 +91,8 @@ def attempt_rknn_conversion(
         "target": target,
         "onnx_path": str(onnx_path),
         "rknn_path": None,
+        "input_size_list": None,
+        "dynamic_input": None,
         "notes": [],
     }
     try:
@@ -101,8 +106,12 @@ def attempt_rknn_conversion(
     log_path = output_dir / f"{model_name}.log"
     rknn = RKNN(verbose=False)
     try:
-        rknn.config(target_platform=target)
-        load_status = rknn.load_onnx(model=str(onnx_path))
+        input_size_list = _resolve_rknn_input_size_list(onnx_path)
+        dynamic_input = _resolve_rknn_dynamic_input(input_size_list)
+        report["input_size_list"] = input_size_list
+        report["dynamic_input"] = dynamic_input
+        rknn.config(target_platform=target, dynamic_input=dynamic_input)
+        load_status = rknn.load_onnx(model=str(onnx_path), input_size_list=input_size_list)
         if load_status != 0:
             report["notes"].append(f"load_onnx_failed:{load_status}")
             return report
@@ -124,3 +133,36 @@ def attempt_rknn_conversion(
         return report
     finally:
         rknn.release()
+
+
+def _resolve_rknn_input_size_list(onnx_path: Path) -> list[list[int]]:
+    channels = 3
+    height, width = DEFAULT_RKNN_INPUT_SIZE
+    try:
+        import onnx
+
+        model = onnx.load(str(onnx_path))
+        for value_info in model.graph.input:
+            if value_info.name != "pixel_values":
+                continue
+            dims = value_info.type.tensor_type.shape.dim
+            resolved_dims = [_concrete_onnx_dim(dim) for dim in dims]
+            if len(resolved_dims) >= 4:
+                channels = resolved_dims[1] or channels
+                height = resolved_dims[2] or height
+                width = resolved_dims[3] or width
+            break
+    except Exception:
+        pass
+    return [[1, channels, height, width]]
+
+
+def _resolve_rknn_dynamic_input(input_size_list: list[list[int]]) -> list[list[list[int]]]:
+    return [input_size_list]
+
+
+def _concrete_onnx_dim(dim: Any) -> int:
+    dim_value = getattr(dim, "dim_value", 0)
+    if dim_value:
+        return int(dim_value)
+    return 0
