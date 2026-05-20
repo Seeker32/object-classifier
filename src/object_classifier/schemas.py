@@ -27,7 +27,7 @@ class Sample:
     sample_id: str
     sku_id: str
     image_path: str
-    roi_box: tuple[int, int, int, int]
+    roi_points: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]
     roi_version: str = "p0-fixed"
     quality_score: float = 0.0
     quality_status: str = "pass"
@@ -92,7 +92,9 @@ class QualityResult:
 class NormalizedROI:
     image: np.ndarray
     source_path: str | None
-    roi_box: tuple[int, int, int, int]
+    roi_points: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]
+    relative_points: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]
+    crop_box: tuple[int, int, int, int]
     original_size: tuple[int, int]
 
 

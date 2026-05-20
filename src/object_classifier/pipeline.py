@@ -212,7 +212,7 @@ class ObjectClassifierPipeline:
             sample = self.repository.add_sample(
                 sku_id=sku_id,
                 image_path=str(context["image_path"]),
-                roi_box=context["roi"].roi_box,
+                roi_points=context["roi"].roi_points,
                 quality=context["quality"],
                 sample_type=sample_type,
                 created_by=created_by,
@@ -246,7 +246,6 @@ class ObjectClassifierPipeline:
             return normalize_roi(
                 image=image,
                 roi_box=self.config.model.roi_box,
-                output_size=self.config.model.input_size,
                 min_size=(self.config.quality.min_width, self.config.quality.min_height),
                 source_path=str(image_path),
             )

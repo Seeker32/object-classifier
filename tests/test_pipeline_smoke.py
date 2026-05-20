@@ -11,7 +11,7 @@ from object_classifier.config import (
     ModelConfig,
     PipelineConfig,
     QualityThresholds,
-    ROIBox,
+    ROIPolygon,
     StorageConfig,
 )
 from object_classifier.features import PyTorchFeatureBackend
@@ -45,7 +45,7 @@ def build_pipeline(root: Path) -> ObjectClassifierPipeline:
         model=ModelConfig(
             backend="pytorch",
             input_size=(32, 32),
-            roi_box=ROIBox(0, 0, 48, 48),
+            roi_box=ROIPolygon(((0, 0), (0, 47), (47, 47), (47, 0))),
             embedding_dim=3,
         ),
         quality=QualityThresholds(

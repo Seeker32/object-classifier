@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from object_classifier.config import ModelConfig, ROIBox
+from object_classifier.config import ModelConfig, ROIPolygon
 from object_classifier.features import RKNNRuntimeSession, create_backend
 from object_classifier.schemas import NormalizedROI
 
@@ -41,7 +41,9 @@ def test_rknn_runtime_session_satisfies_backend_contract(tmp_path) -> None:
     roi = NormalizedROI(
         image=np.ones((16, 16, 3), dtype=np.uint8) * 127,
         source_path=None,
-        roi_box=(0, 0, 16, 16),
+        roi_points=((0, 0), (0, 15), (15, 15), (15, 0)),
+        relative_points=((0, 0), (0, 15), (15, 15), (15, 0)),
+        crop_box=(0, 0, 16, 16),
         original_size=(16, 16),
     )
 
@@ -50,7 +52,7 @@ def test_rknn_runtime_session_satisfies_backend_contract(tmp_path) -> None:
         ModelConfig(
             backend="rknn",
             input_size=(16, 16),
-            roi_box=ROIBox(0, 0, 16, 16),
+            roi_box=ROIPolygon(((0, 0), (0, 15), (15, 15), (15, 0))),
             embedding_dim=3,
             rknn_embedding_path=artifact,
             rknn_patch_tokens_path=artifact,

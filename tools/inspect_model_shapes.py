@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from object_classifier.config import ModelConfig, ROIBox
+from object_classifier.config import ModelConfig
 from object_classifier.features import (
     _run_feature_forward,
     _unpack_model_outputs,
@@ -30,7 +30,6 @@ def main(argv: list[str] | None = None) -> int:
         provider=args.provider,
         model_name=args.model_id,
         input_size=(224, 224),
-        roi_box=ROIBox(0, 0, 224, 224),
         embedding_dim=384,
         repo_dir=Path(args.repo_dir) if args.repo_dir else None,
         weights_dir=Path(args.weights_dir) if args.weights_dir else None,

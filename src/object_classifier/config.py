@@ -5,6 +5,35 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
+class ROIPolygon:
+    points: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]
+
+    @property
+    def left(self) -> int:
+        return min(point[0] for point in self.points)
+
+    @property
+    def top(self) -> int:
+        return min(point[1] for point in self.points)
+
+    @property
+    def right(self) -> int:
+        return max(point[0] for point in self.points)
+
+    @property
+    def bottom(self) -> int:
+        return max(point[1] for point in self.points)
+
+    @property
+    def width(self) -> int:
+        return self.right - self.left
+
+    @property
+    def height(self) -> int:
+        return self.bottom - self.top
+
+
+@dataclass(frozen=True)
 class ROIBox:
     left: int
     top: int
@@ -18,6 +47,15 @@ class ROIBox:
     @property
     def height(self) -> int:
         return self.bottom - self.top
+
+    @property
+    def points(self) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]:
+        return (
+            (self.left, self.top),
+            (self.left, self.bottom - 1),
+            (self.right - 1, self.bottom - 1),
+            (self.right - 1, self.top),
+        )
 
 
 @dataclass(frozen=True)
@@ -77,7 +115,9 @@ class ModelConfig:
     backend: str = "pytorch"
     provider: str = "statistics"
     input_size: tuple[int, int] = (224, 224)
-    roi_box: ROIBox = field(default_factory=lambda: ROIBox(0, 0, 224, 224))
+    roi_box: ROIPolygon = field(
+        default_factory=lambda: ROIPolygon(((102, 98), (102, 439), (471, 433), (479, 94)))
+    )
     model_name: str = "facebook/dinov3-vits16-pretrain-lvd1689m"
     embedding_dim: int = 384
     device: str = "cpu"

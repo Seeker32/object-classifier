@@ -14,7 +14,7 @@ def test_repository_creates_sku_and_persists_sample_and_features(tmp_path) -> No
     sample = repository.add_sample(
         sku_id=sku.sku_id,
         image_path="/tmp/widget.png",
-        roi_box=(1, 2, 30, 40),
+        roi_points=((1, 2), (1, 40), (30, 40), (30, 2)),
         quality=QualityResult(
             status="pass",
             score=0.9,
@@ -37,6 +37,7 @@ def test_repository_creates_sku_and_persists_sample_and_features(tmp_path) -> No
     assert sku.sku_id.startswith("sku-")
     assert repository.get_sku(sku.sku_id) == sku
     assert repository.get_sample(sample.sample_id) == sample
+    assert sample.roi_points == ((1, 2), (1, 40), (30, 40), (30, 2))
     assert repository.get_feature_record(sample.sample_id) == record
 
     restored = repository.load_feature_bundle(record)

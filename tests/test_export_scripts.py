@@ -4,7 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-from object_classifier.config import ModelConfig, ROIBox
+from object_classifier.config import ModelConfig, ROIPolygon
 from object_classifier.schemas import ExportArtifacts
 
 
@@ -85,7 +85,7 @@ def test_export_onnx_script_writes_onnx_payload(tmp_path, monkeypatch, capsys) -
     assert isinstance(config, ModelConfig)
     assert config.provider == "statistics"
     assert config.model_name == "dinov3_vits16"
-    assert config.roi_box == ROIBox(0, 0, 224, 224)
+    assert config.roi_box == ROIPolygon(((102, 98), (102, 439), (471, 433), (479, 94)))
 
 
 def test_export_onnx_script_can_skip_validation(tmp_path, monkeypatch, capsys) -> None:
@@ -313,4 +313,4 @@ def test_inspect_model_shapes_script_prints_onnx_and_pytorch_dimensions(tmp_path
     assert isinstance(config, ModelConfig)
     assert config.provider == "torchhub"
     assert config.model_name == "dinov3_vits16"
-    assert config.roi_box == ROIBox(0, 0, 224, 224)
+    assert config.roi_box == ROIPolygon(((102, 98), (102, 439), (471, 433), (479, 94)))

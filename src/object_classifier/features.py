@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+from PIL import Image
 
 from .config import ModelConfig
 from .schemas import FeatureBundle, NormalizedROI
@@ -36,7 +37,8 @@ class BaseFeatureBackend:
     backend_name: str = "base"
 
     def extract(self, roi: NormalizedROI) -> FeatureBundle:
-        batch = preprocess_roi(roi.image, self.config.input_size)
+        prepared = prepare_roi_image(roi, self.config.input_size)
+        batch = preprocess_roi(prepared, self.config.input_size)
         session = self.session or self._load_default_session()
         embedding, patch_tokens = session.infer(batch)
         return FeatureBundle(
@@ -48,6 +50,7 @@ class BaseFeatureBackend:
     def cache_key(self, roi: NormalizedROI) -> str:
         digest = sha256()
         digest.update(roi.image.tobytes())
+        digest.update(str(roi.roi_points).encode("utf-8"))
         digest.update(self.backend_name.encode("utf-8"))
         digest.update(str(self.config.input_size).encode("utf-8"))
         return digest.hexdigest()
@@ -209,6 +212,17 @@ def preprocess_roi(image: np.ndarray, output_size: tuple[int, int]) -> np.ndarra
     normalized = image.astype(np.float32) / 255.0
     chw = np.transpose(normalized, (2, 0, 1))
     return chw[None, ...]
+
+
+def prepare_roi_image(roi: NormalizedROI, output_size: tuple[int, int]) -> np.ndarray:
+    width, height = output_size[1], output_size[0]
+    warped = Image.fromarray(roi.image).transform(
+        (width, height),
+        Image.Transform.QUAD,
+        data=tuple(coordinate for point in roi.relative_points for coordinate in point),
+        resample=Image.Resampling.BILINEAR,
+    )
+    return np.asarray(warped)
 
 
 def l2_normalize(vector: np.ndarray) -> np.ndarray:

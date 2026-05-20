@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from object_classifier.config import QualityThresholds, ROIBox
+from object_classifier.config import QualityThresholds, ROIPolygon
 from object_classifier.quality import assess_quality
 from object_classifier.roi import normalize_roi
 
@@ -17,28 +17,28 @@ def build_image(size: tuple[int, int] = (96, 96)) -> Image.Image:
     return Image.fromarray(image)
 
 
-def test_normalize_roi_resizes_image() -> None:
-    image = build_image()
+def test_normalize_roi_preserves_raw_crop_and_relative_points() -> None:
+    image = build_image((512, 512))
     roi = normalize_roi(
         image,
-        ROIBox(left=10, top=12, right=62, bottom=70),
-        output_size=(32, 32),
+        ROIPolygon(((102, 98), (102, 439), (471, 433), (479, 94))),
         min_size=(24, 24),
     )
 
-    assert roi.image.shape == (32, 32, 3)
-    assert roi.roi_box == (10, 12, 62, 70)
-    assert roi.original_size == (96, 96)
+    assert roi.image.shape == (346, 378, 3)
+    assert roi.crop_box == (102, 94, 480, 440)
+    assert roi.roi_points == ((102, 98), (102, 439), (471, 433), (479, 94))
+    assert roi.relative_points == ((0, 4), (0, 345), (369, 339), (377, 0))
+    assert roi.original_size == (512, 512)
 
 
-def test_normalize_roi_rejects_out_of_range_box() -> None:
+def test_normalize_roi_rejects_out_of_range_polygon() -> None:
     image = build_image()
 
     with pytest.raises(ValueError, match="outside"):
         normalize_roi(
             image,
-            ROIBox(left=60, top=10, right=140, bottom=70),
-            output_size=(32, 32),
+            ROIPolygon(((10, 10), (10, 80), (120, 80), (120, 10))),
             min_size=(24, 24),
         )
 

@@ -10,7 +10,7 @@ from object_classifier.cli import main
 
 
 def write_pattern_image(path: Path, rgb: tuple[int, int, int]) -> None:
-    image = np.zeros((256, 256, 3), dtype=np.uint8)
+    image = np.zeros((512, 512, 3), dtype=np.uint8)
     image[..., 0] = rgb[0]
     image[..., 1] = rgb[1]
     image[..., 2] = rgb[2]

@@ -24,7 +24,9 @@ def test_backends_share_output_contract() -> None:
     roi = NormalizedROI(
         image=np.ones((16, 16, 3), dtype=np.uint8) * 127,
         source_path=None,
-        roi_box=(0, 0, 16, 16),
+        roi_points=((0, 0), (0, 15), (15, 15), (15, 0)),
+        relative_points=((0, 0), (0, 15), (15, 15), (15, 0)),
+        crop_box=(0, 0, 16, 16),
         original_size=(16, 16),
     )
     config = ModelConfig(input_size=(16, 16), roi_box=ROIBox(0, 0, 16, 16), embedding_dim=3)

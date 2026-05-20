@@ -71,7 +71,7 @@ class LocalRepository:
         self,
         sku_id: str,
         image_path: str,
-        roi_box: tuple[int, int, int, int],
+        roi_points: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]],
         quality: QualityResult,
         sample_type: str = "register",
         created_by: str = "system",
@@ -82,7 +82,7 @@ class LocalRepository:
             sample_id=self.generate_sample_id(),
             sku_id=sku_id,
             image_path=image_path,
-            roi_box=roi_box,
+            roi_points=roi_points,
             quality_score=quality.score,
             quality_status=quality.status,
             sample_type=sample_type,
@@ -102,7 +102,7 @@ class LocalRepository:
                     sample.sample_id,
                     sample.sku_id,
                     sample.image_path,
-                    json.dumps(list(sample.roi_box)),
+                    json.dumps([list(point) for point in sample.roi_points]),
                     sample.roi_version,
                     sample.quality_score,
                     sample.quality_status,
@@ -447,7 +447,8 @@ class LocalRepository:
 
     def _sample_from_row(self, row: sqlite3.Row) -> Sample:
         payload = dict(row)
-        payload["roi_box"] = tuple(json.loads(payload["roi_box"]))
+        payload["roi_points"] = tuple(tuple(point) for point in json.loads(payload["roi_box"]))
+        payload.pop("roi_box")
         return Sample(**payload)
 
     def _review_from_row(self, row: sqlite3.Row) -> ReviewRecord:
