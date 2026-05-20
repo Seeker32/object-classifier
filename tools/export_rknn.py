@@ -4,57 +4,66 @@ import argparse
 import json
 from pathlib import Path
 
-from object_classifier.config import ModelConfig, ROIBox
-from object_classifier.export import attempt_rknn_conversion, export_onnx_artifacts
-from object_classifier.features import create_backend
+from object_classifier.export import attempt_rknn_conversion
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="export-rknn")
-    parser.add_argument("--output-dir", default="var/object-classifier/export")
-    parser.add_argument("--provider", choices=("torchhub", "huggingface", "statistics"), default="torchhub")
-    parser.add_argument("--model-id", default="dinov3_vits16")
-    parser.add_argument("--repo-dir", default=None)
-    parser.add_argument("--weights-dir", default=None)
+    parser.add_argument("--output-dir", default="data/object-classifier/export")
     parser.add_argument("--target", default="rk3588")
+    parser.add_argument("--embedding-onnx", default="data/object-classifier/export/embedding.onnx")
+    parser.add_argument("--patch-tokens-onnx", default="data/object-classifier/export/patch_tokens.onnx")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     output_dir = Path(args.output_dir)
-    config = ModelConfig(
-        backend="pytorch",
-        provider=args.provider,
-        model_name=args.model_id,
-        input_size=(224, 224),
-        roi_box=ROIBox(0, 0, 224, 224),
-        embedding_dim=384,
-        repo_dir=Path(args.repo_dir) if args.repo_dir else None,
-        weights_dir=Path(args.weights_dir) if args.weights_dir else None,
-    )
-    backend = create_backend("pytorch", config)
-    artifacts = export_onnx_artifacts(output_dir, backend=backend)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    embedding_onnx = Path(args.embedding_onnx)
+    patch_tokens_onnx = Path(args.patch_tokens_onnx)
     conversion_reports = []
-    if artifacts.embedding_onnx:
+    notes: list[str] = []
+
+    if embedding_onnx.exists():
         conversion_reports.append(
-            attempt_rknn_conversion(artifacts.embedding_onnx, output_dir, "embedding", target=args.target)
+            attempt_rknn_conversion(embedding_onnx, output_dir, "embedding", target=args.target)
         )
-    if artifacts.patch_tokens_onnx:
+    else:
+        notes.append(f"missing_onnx:embedding:{embedding_onnx}")
+
+    if patch_tokens_onnx.exists():
         conversion_reports.append(
-            attempt_rknn_conversion(artifacts.patch_tokens_onnx, output_dir, "patch_tokens", target=args.target)
+            attempt_rknn_conversion(patch_tokens_onnx, output_dir, "patch_tokens", target=args.target)
         )
+    else:
+        notes.append(f"missing_onnx:patch_tokens:{patch_tokens_onnx}")
+
+    status = _resolve_status(conversion_reports, notes)
+    report_path = output_dir / "rknn_report.json"
     payload = {
-        "status": artifacts.status,
-        "report_path": str(artifacts.report_path),
-        "embedding_onnx": str(artifacts.embedding_onnx) if artifacts.embedding_onnx else None,
-        "patch_tokens_onnx": str(artifacts.patch_tokens_onnx) if artifacts.patch_tokens_onnx else None,
-        "notes": artifacts.notes,
+        "status": status,
+        "report_path": str(report_path),
+        "embedding_onnx": str(embedding_onnx) if embedding_onnx.exists() else None,
+        "patch_tokens_onnx": str(patch_tokens_onnx) if patch_tokens_onnx.exists() else None,
+        "notes": notes,
         "rknn": conversion_reports,
     }
-    (output_dir / "rknn_report.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(json.dumps(payload))
     return 0
+
+
+def _resolve_status(conversion_reports: list[dict[str, object]], notes: list[str]) -> str:
+    if not conversion_reports:
+        return "blocked"
+    if notes:
+        return "partial"
+    if all(report.get("status") == "ready" for report in conversion_reports):
+        return "ready"
+    if any(report.get("status") == "ready" for report in conversion_reports):
+        return "partial"
+    return "blocked"
 
 
 if __name__ == "__main__":

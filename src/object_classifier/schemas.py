@@ -116,3 +116,7 @@ class ExportArtifacts:
     patch_tokens_onnx: Path | None
     rknn_log: Path | None = None
     notes: list[str] = field(default_factory=list)
+    validation_status: str = "not_run"
+    validated_batches: list[int] = field(default_factory=list)
+    embedding_metrics: dict[str, float] | None = None
+    patch_tokens_metrics: dict[str, float] | None = None
