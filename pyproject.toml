@@ -32,6 +32,10 @@ export = [
 vision = [
   "opencv-python-headless>=4.11,<5",
 ]
+rknn = [
+  "rknn-toolkit2>=2.3.2",
+  "setuptools<72",
+]
 
 [project.scripts]
 object-classifier = "object_classifier.cli:main"
