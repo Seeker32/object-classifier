@@ -21,6 +21,8 @@ class ExportableSession(Protocol):
         self,
         output_dir: Path,
         input_size: tuple[int, int],
+        *,
+        validate: bool = True,
     ) -> dict[str, Any]:
         """Export embedding and patch-token paths to ONNX artifacts."""
 
@@ -80,7 +82,7 @@ class TorchModuleSession:
             patch_tokens.detach().cpu().numpy().reshape(-1, patch_tokens.shape[-1]),
         )
 
-    def export_onnx(self, output_dir: Path, input_size: tuple[int, int]) -> dict[str, Any]:
+    def export_onnx(self, output_dir: Path, input_size: tuple[int, int], *, validate: bool = True) -> dict[str, Any]:
         import torch
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -109,11 +111,23 @@ class TorchModuleSession:
             opset_version=18,
             dynamic_axes={"pixel_values": {0: "batch"}, "patch_tokens": {0: "batch"}},
         )
+        validation = _validate_onnx_export(
+            module=self.module,
+            input_size=input_size,
+            embedding_path=embedding_path,
+            patch_tokens_path=patch_tokens_path,
+            enabled=validate,
+        )
+        notes = ["torch_onnx_export_complete", *validation["notes"]]
         return {
-            "status": "ready",
+            "status": "partial" if validation["validation_status"] == "failed" else "ready",
             "embedding_onnx": embedding_path,
             "patch_tokens_onnx": patch_tokens_path,
-            "notes": ["torch_onnx_export_complete"],
+            "notes": notes,
+            "validation_status": validation["validation_status"],
+            "validated_batches": validation["validated_batches"],
+            "embedding_metrics": validation["embedding_metrics"],
+            "patch_tokens_metrics": validation["patch_tokens_metrics"],
         }
 
 
@@ -178,7 +192,7 @@ def load_feature_cache(path: Path) -> FeatureBundle:
         )
 
 
-def export_backend_to_onnx(backend: BaseFeatureBackend, output_dir: Path) -> dict[str, Any]:
+def export_backend_to_onnx(backend: BaseFeatureBackend, output_dir: Path, *, validate: bool = True) -> dict[str, Any]:
     session = backend.session or backend._load_default_session()
     if not hasattr(session, "export_onnx"):
         return {
@@ -186,8 +200,12 @@ def export_backend_to_onnx(backend: BaseFeatureBackend, output_dir: Path) -> dic
             "embedding_onnx": None,
             "patch_tokens_onnx": None,
             "notes": [f"session_not_exportable:{type(session).__name__}"],
+            "validation_status": "not_run",
+            "validated_batches": [],
+            "embedding_metrics": None,
+            "patch_tokens_metrics": None,
         }
-    return session.export_onnx(output_dir, backend.config.input_size)
+    return session.export_onnx(output_dir, backend.config.input_size, validate=validate)
 
 
 def _unpack_model_outputs(outputs):
@@ -332,3 +350,79 @@ def _run_feature_forward(module, pixel_values):
     if hasattr(module, "forward_features"):
         return module.forward_features(pixel_values)
     return module(pixel_values)
+
+
+def _validate_onnx_export(
+    module,
+    input_size: tuple[int, int],
+    embedding_path: Path,
+    patch_tokens_path: Path,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "validation_status": "skipped",
+            "validated_batches": [],
+            "embedding_metrics": None,
+            "patch_tokens_metrics": None,
+            "notes": ["validation_skipped:user_request"],
+        }
+
+    try:
+        import onnxruntime as ort
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "ONNX validation requires onnxruntime, which is not installed. "
+            "Install it with: pip install 'object-classifier[export]'"
+        ) from exc
+    import torch
+
+    module.eval()
+    embedding_wrapper = _EmbeddingExportWrapper(module).eval()
+    patch_wrapper = _PatchTokenExportWrapper(module).eval()
+    embedding_session = ort.InferenceSession(str(embedding_path), providers=["CPUExecutionProvider"])
+    patch_tokens_session = ort.InferenceSession(str(patch_tokens_path), providers=["CPUExecutionProvider"])
+    batch_sizes = [1, 2]
+    embedding_errors: list[tuple[float, float]] = []
+    patch_token_errors: list[tuple[float, float]] = []
+
+    with torch.no_grad():
+        for batch_size in batch_sizes:
+            sample = torch.randn(batch_size, 3, input_size[0], input_size[1], dtype=torch.float32)
+            torch_embedding = embedding_wrapper(sample).detach().cpu().numpy()
+            torch_patch_tokens = patch_wrapper(sample).detach().cpu().numpy()
+            ort_inputs = {"pixel_values": sample.cpu().numpy()}
+            onnx_embedding = embedding_session.run(None, ort_inputs)[0]
+            onnx_patch_tokens = patch_tokens_session.run(None, ort_inputs)[0]
+            embedding_errors.append(_compute_error_metrics(torch_embedding, onnx_embedding))
+            patch_token_errors.append(_compute_error_metrics(torch_patch_tokens, onnx_patch_tokens))
+
+    embedding_metrics = _summarize_error_metrics(embedding_errors)
+    patch_tokens_metrics = _summarize_error_metrics(patch_token_errors)
+    validation_failed = any(
+        metric["max_abs_err"] > 1e-4 or metric["mean_abs_err"] > 1e-5
+        for metric in (embedding_metrics, patch_tokens_metrics)
+    )
+    status = "failed" if validation_failed else "passed"
+    return {
+        "validation_status": status,
+        "validated_batches": batch_sizes,
+        "embedding_metrics": embedding_metrics,
+        "patch_tokens_metrics": patch_tokens_metrics,
+        "notes": [f"validation_{status}"],
+    }
+
+
+def _compute_error_metrics(expected: np.ndarray, actual: np.ndarray) -> tuple[float, float]:
+    difference = np.abs(expected - actual)
+    return float(difference.max(initial=0.0)), float(difference.mean())
+
+
+def _summarize_error_metrics(metrics: list[tuple[float, float]]) -> dict[str, float]:
+    if not metrics:
+        return {"max_abs_err": 0.0, "mean_abs_err": 0.0}
+    return {
+        "max_abs_err": max(metric[0] for metric in metrics),
+        "mean_abs_err": max(metric[1] for metric in metrics),
+    }

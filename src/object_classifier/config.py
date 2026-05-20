@@ -38,7 +38,7 @@ class DecisionThresholds:
 
 @dataclass(frozen=True)
 class StorageConfig:
-    root: Path = Path("var/object-classifier")
+    root: Path = Path("data/object-classifier")
     metadata_dir: str = "metadata"
     feature_dir: str = "features"
     patch_token_dir: str = "patch_tokens"
@@ -61,7 +61,7 @@ class StorageConfig:
 @dataclass(frozen=True)
 class FeatureCacheConfig:
     enabled: bool = True
-    cache_dir: Path = Path("var/object-classifier/cache")
+    cache_dir: Path = Path("data/object-classifier/cache")
 
 
 @dataclass(frozen=True)

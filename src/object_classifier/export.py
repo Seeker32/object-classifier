@@ -12,6 +12,8 @@ def export_onnx_artifacts(
     output_dir: Path,
     backend: BaseFeatureBackend | None = None,
     exporter=None,
+    *,
+    validate: bool = True,
 ) -> ExportArtifacts:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "export_report.json"
@@ -20,13 +22,17 @@ def export_onnx_artifacts(
     if backend is not None:
         active_exporter = exporter or export_backend_to_onnx
         try:
-            payload = dict(active_exporter(backend, output_dir))
+            payload = dict(active_exporter(backend, output_dir, validate=validate))
         except ModuleNotFoundError as exc:
             payload = {
                 "status": "blocked",
                 "embedding_onnx": None,
                 "patch_tokens_onnx": None,
                 "notes": [f"missing_dependency:{exc.name}"],
+                "validation_status": "not_run",
+                "validated_batches": [],
+                "embedding_metrics": None,
+                "patch_tokens_metrics": None,
             }
 
     report = _serialize_payload(payload)
@@ -37,6 +43,10 @@ def export_onnx_artifacts(
         embedding_onnx=Path(report["embedding_onnx"]) if report["embedding_onnx"] else None,
         patch_tokens_onnx=Path(report["patch_tokens_onnx"]) if report["patch_tokens_onnx"] else None,
         notes=report["notes"],
+        validation_status=report["validation_status"],
+        validated_batches=report["validated_batches"],
+        embedding_metrics=report["embedding_metrics"],
+        patch_tokens_metrics=report["patch_tokens_metrics"],
     )
 
 
@@ -46,6 +56,10 @@ def _default_report(output_dir: Path) -> dict[str, Any]:
         "embedding_onnx": None,
         "patch_tokens_onnx": None,
         "notes": ["backend_required_for_export"],
+        "validation_status": "not_run",
+        "validated_batches": [],
+        "embedding_metrics": None,
+        "patch_tokens_metrics": None,
     }
 
 
@@ -55,6 +69,10 @@ def _serialize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "embedding_onnx": str(payload["embedding_onnx"]) if payload.get("embedding_onnx") else None,
         "patch_tokens_onnx": str(payload["patch_tokens_onnx"]) if payload.get("patch_tokens_onnx") else None,
         "notes": list(payload.get("notes", [])),
+        "validation_status": payload.get("validation_status", "not_run"),
+        "validated_batches": list(payload.get("validated_batches", [])),
+        "embedding_metrics": payload.get("embedding_metrics"),
+        "patch_tokens_metrics": payload.get("patch_tokens_metrics"),
     }
 
 

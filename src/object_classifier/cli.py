@@ -13,7 +13,7 @@ from .pipeline import ObjectClassifierPipeline
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="object-classifier")
-    parser.add_argument("--storage-root", default="var/object-classifier")
+    parser.add_argument("--storage-root", default="data/object-classifier")
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--backend", choices=("pytorch", "rknn"), default="pytorch")
     parser.add_argument("--provider", choices=("statistics", "huggingface", "torchhub"), default="statistics")
@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     identify.add_argument("image")
 
     export = subparsers.add_parser("export")
-    export.add_argument("--output-dir", default="var/object-classifier/export")
+    export.add_argument("--output-dir", default="data/object-classifier/export")
 
     return parser
 
