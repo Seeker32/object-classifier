@@ -32,9 +32,11 @@ class Sample:
     quality_score: float = 0.0
     quality_status: str = "pass"
     sample_type: str = "register"
+    status: str = "active"
     source_task_id: str | None = None
     created_by: str = "system"
     created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class DecisionResult:
     top_candidate: Candidate | None
     candidates: list[Candidate]
     reasons: list[str]
+    review_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -98,14 +101,61 @@ class ManualReviewPayload:
     image_path: str
     candidates: list[Candidate]
     quality: QualityResult
+    review_type: str = "identify"
+    requested_actions: list[str] = field(default_factory=list)
     query_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class RegistrationResult:
-    sku: SKU
+    decision: str
+    sku: SKU | None
     samples: list[Sample]
     warnings: list[str] = field(default_factory=list)
+    review_id: str | None = None
+    candidates: list[Candidate] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReviewRecord:
+    review_id: str
+    review_type: str
+    status: str
+    requested_actions: list[str]
+    image_paths: list[str]
+    candidates: list[Candidate]
+    quality: QualityResult | None = None
+    target_sku_name: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_by: str = "system"
+    created_at: str = field(default_factory=utc_now)
+    resolved_by: str | None = None
+    resolved_at: str | None = None
+    resolution_action: str | None = None
+    resolution_payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReviewConfirmationResult:
+    review_id: str
+    status: str
+    action: str
+    sku_id: str | None = None
+    sample_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AuditRecord:
+    audit_id: int
+    event_type: str
+    entity_type: str
+    entity_id: str
+    actor: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True)
