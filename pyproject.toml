@@ -33,7 +33,7 @@ export = [
   "onnxruntime>=1.21,<2",
 ]
 vision = [
-  "opencv-python-headless>=4.11,<5",
+  "opencv-python>=4.11,<4.13",
 ]
 rknn = [
   "rknn-toolkit2>=2.3.2",
