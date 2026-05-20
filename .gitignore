@@ -12,3 +12,6 @@ wheels/
 
 models/
 var/
+*.sqlite3
+*.onnx
+*.rknn
