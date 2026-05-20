@@ -9,8 +9,11 @@ description = "Closed-loop SKU classification pipeline with ROI, retrieval, rera
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi>=0.116,<1",
   "numpy==1.26.4",
   "pillow>=11.2,<12",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +41,7 @@ object-classifier = "object_classifier.cli:main"
 
 [dependency-groups]
 dev = [
+  "httpx>=0.28,<1",
   "pytest>=8.3,<9",
 ]
 
