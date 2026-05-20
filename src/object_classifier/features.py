@@ -101,7 +101,6 @@ class TorchModuleSession:
             input_names=["pixel_values"],
             output_names=["global_embedding"],
             opset_version=18,
-            dynamic_axes={"pixel_values": {0: "batch"}, "global_embedding": {0: "batch"}},
         )
         torch.onnx.export(
             patch_wrapper,
@@ -110,7 +109,6 @@ class TorchModuleSession:
             input_names=["pixel_values"],
             output_names=["patch_tokens"],
             opset_version=18,
-            dynamic_axes={"pixel_values": {0: "batch"}, "patch_tokens": {0: "batch"}},
         )
         validation = _validate_onnx_export(
             module=self.module,
@@ -144,6 +142,52 @@ class StatisticsFeatureSession:
             ]
         ).astype(np.float32)
         return channels, quadrants
+
+
+class RKNNRuntimeSession:
+    def __init__(
+        self,
+        embedding_model_path: Path,
+        patch_model_path: Path | None,
+        *,
+        runtime_factory=None,
+    ) -> None:
+        self.embedding_model_path = Path(embedding_model_path)
+        self.patch_model_path = Path(patch_model_path) if patch_model_path is not None else None
+        self.runtime_factory = runtime_factory
+        self._embedding_runtime = None
+        self._patch_runtime = None
+
+    def infer(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        embedding_runtime = self._embedding_runtime or self._build_runtime(self.embedding_model_path)
+        self._embedding_runtime = embedding_runtime
+        embedding_outputs = embedding_runtime.inference(inputs=[batch])
+
+        embedding = np.asarray(embedding_outputs[0], dtype=np.float32).reshape(-1)
+        if self.patch_model_path is None:
+            patch_tokens = np.asarray(batch.reshape(batch.shape[1], -1).T, dtype=np.float32)
+            return embedding, patch_tokens
+
+        if self.patch_model_path == self.embedding_model_path and len(embedding_outputs) > 1:
+            patch_tokens = np.asarray(embedding_outputs[1], dtype=np.float32).reshape(-1, embedding_outputs[1].shape[-1])
+            return embedding, patch_tokens
+
+        patch_runtime = self._patch_runtime or self._build_runtime(self.patch_model_path)
+        self._patch_runtime = patch_runtime
+        patch_outputs = patch_runtime.inference(inputs=[batch])
+        patch_tokens = np.asarray(patch_outputs[0], dtype=np.float32).reshape(-1, patch_outputs[0].shape[-1])
+        return embedding, patch_tokens
+
+    def _build_runtime(self, model_path: Path):
+        runtime_cls = self.runtime_factory or _default_rknn_runtime_factory()
+        runtime = runtime_cls()
+        load_status = runtime.load_rknn(str(model_path))
+        if load_status != 0:
+            raise RuntimeError(f"Failed to load RKNN artifact: {model_path}")
+        init_status = runtime.init_runtime()
+        if init_status != 0:
+            raise RuntimeError(f"Failed to init RKNN runtime: {model_path}")
+        return runtime
 
 
 def create_backend(backend_name: str, config: ModelConfig, session: InferenceSession | None = None) -> BaseFeatureBackend:
@@ -303,6 +347,13 @@ class _FrozenRopePatchTokenExportWrapper:
 
 
 def _build_default_session(config: ModelConfig) -> InferenceSession:
+    if config.backend == "rknn":
+        embedding_path = config.rknn_embedding_path or _resolve_default_rknn_path(config, "embedding.rknn")
+        patch_path = config.rknn_patch_tokens_path
+        if patch_path is None:
+            candidate_patch = _resolve_default_rknn_path(config, "patch_tokens.rknn", required=False)
+            patch_path = candidate_patch
+        return RKNNRuntimeSession(embedding_model_path=embedding_path, patch_model_path=patch_path)
     if config.provider == "statistics":
         return StatisticsFeatureSession()
     if config.provider == "huggingface":
@@ -436,6 +487,31 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def _resolve_default_rknn_path(config: ModelConfig, filename: str, *, required: bool = True) -> Path | None:
+    candidates = [
+        (config.weights_dir / filename) if config.weights_dir is not None else None,
+        _project_root() / "data" / "object-classifier" / "export" / filename,
+        _repository_root() / "data" / "object-classifier" / "export" / filename,
+    ]
+    for candidate in candidates:
+        if candidate is not None and candidate.exists():
+            return candidate
+    if required:
+        raise FileNotFoundError(f"RKNN artifact not found: {filename}")
+    return None
+
+
+def _default_rknn_runtime_factory():
+    try:
+        from rknnlite.api import RKNNLite
+
+        return RKNNLite
+    except ModuleNotFoundError:
+        from rknn.api import RKNN
+
+        return RKNN
+
+
 def _run_feature_forward(module, pixel_values):
     if hasattr(module, "forward_features"):
         return module.forward_features(pixel_values)
@@ -539,7 +615,7 @@ def _validate_onnx_export(
     patch_wrapper = _PatchTokenExportWrapper(module).eval()
     embedding_session = ort.InferenceSession(str(embedding_path), providers=["CPUExecutionProvider"])
     patch_tokens_session = ort.InferenceSession(str(patch_tokens_path), providers=["CPUExecutionProvider"])
-    batch_sizes = [1, 2]
+    batch_sizes = [1]
     embedding_errors: list[tuple[float, float]] = []
     patch_token_errors: list[tuple[float, float]] = []
 

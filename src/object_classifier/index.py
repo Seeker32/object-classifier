@@ -18,6 +18,7 @@ class SampleIndex:
     vectors: np.ndarray = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
     mapping: list[FeatureRecord] = field(default_factory=list)
     backend_name: str = field(init=False, default="numpy")
+    stale: bool = False
     _faiss: Any = field(init=False, default=None, repr=False)
     _faiss_index: Any = field(init=False, default=None, repr=False)
 
@@ -28,11 +29,33 @@ class SampleIndex:
     def rebuild(self, records: list[FeatureRecord], vectors: list[np.ndarray]) -> None:
         self.mapping = list(records)
         self.vectors = self._stack_vectors(vectors)
+        self.stale = False
         if self.backend_name == "faiss" and self.vectors.size > 0:
             self._faiss_index = self._faiss.IndexFlatIP(self.vectors.shape[1])
             self._faiss_index.add(self.vectors)
         else:
             self._faiss_index = None
+
+    def append(self, record: FeatureRecord, vector: np.ndarray) -> None:
+        vector = np.asarray(vector, dtype=np.float32).reshape(1, -1)
+        if self.vectors.size == 0:
+            self.mapping = [record]
+            self.vectors = vector
+        else:
+            if vector.shape[1] != self.vectors.shape[1]:
+                raise ValueError("Vector dimension mismatch while appending index entry")
+            self.mapping.append(record)
+            self.vectors = np.vstack([self.vectors, vector])
+        if self.backend_name == "faiss":
+            if self._faiss_index is None:
+                self._faiss_index = self._faiss.IndexFlatIP(self.vectors.shape[1])
+                self._faiss_index.add(self.vectors)
+            else:
+                self._faiss_index.add(vector)
+        self.stale = False
+
+    def mark_stale(self) -> None:
+        self.stale = True
 
     def search_topk(self, query_embedding: np.ndarray, k: int = 20) -> list[Candidate]:
         if not self.mapping or self.vectors.size == 0:
