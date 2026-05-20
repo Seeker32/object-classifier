@@ -5,9 +5,16 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 from object_classifier.config import ModelConfig, ROIBox
 from object_classifier.export import attempt_rknn_conversion, export_onnx_artifacts
-from object_classifier.features import PyTorchFeatureBackend, StatisticsFeatureSession
+from object_classifier.features import (
+    PyTorchFeatureBackend,
+    StatisticsFeatureSession,
+    _find_unsupported_onnx_ops,
+    _forward_features_with_frozen_rope,
+)
 
 
 def test_export_onnx_artifacts_uses_backend_exporter(tmp_path) -> None:
@@ -159,3 +166,53 @@ def test_attempt_rknn_conversion_falls_back_to_default_input_size_when_onnx_miss
     assert report["status"] == "ready"
     assert report["input_size_list"] == [[1, 3, 224, 224]]
     assert report["dynamic_input"] == [[[1, 3, 224, 224]]]
+
+
+def test_forward_features_with_frozen_rope_uses_precomputed_rope() -> None:
+    captured: dict[str, object] = {}
+
+    class FakeBlock:
+        def __call__(self, x, rope):
+            captured.setdefault("ropes", []).append(rope)
+            return x + 1
+
+    class FakeModule:
+        n_storage_tokens = 0
+        blocks = [FakeBlock(), FakeBlock()]
+        untie_cls_and_patch_norms = False
+        untie_global_and_local_cls_norm = False
+
+        @staticmethod
+        def prepare_tokens_with_masks(pixel_values, masks=None):
+            return pixel_values, (2, 2)
+
+        @staticmethod
+        def norm(x):
+            return x * 2
+
+    pixel_values = np.arange(24, dtype=np.float32).reshape(1, 3, 8)
+    rope = ("sin", "cos")
+
+    outputs = _forward_features_with_frozen_rope(FakeModule(), pixel_values, rope)
+
+    assert captured["ropes"] == [rope, rope]
+    assert outputs["x_norm_clstoken"].shape == (1, 8)
+    assert outputs["x_norm_patchtokens"].shape == (1, 2, 8)
+
+
+def test_find_unsupported_onnx_ops_reports_if_nodes(tmp_path, monkeypatch) -> None:
+    onnx_path = tmp_path / "embedding.onnx"
+    onnx_path.write_bytes(b"onnx")
+    fake_model = SimpleNamespace(
+        graph=SimpleNamespace(
+            node=[
+                SimpleNamespace(op_type="Identity"),
+                SimpleNamespace(op_type="If"),
+                SimpleNamespace(op_type="Add"),
+            ]
+        )
+    )
+
+    monkeypatch.setitem(sys.modules, "onnx", SimpleNamespace(load=lambda path: fake_model))
+
+    assert _find_unsupported_onnx_ops(onnx_path) == ["If"]

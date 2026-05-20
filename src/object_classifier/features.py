@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import sys
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -90,8 +92,7 @@ class TorchModuleSession:
         patch_tokens_path = output_dir / "patch_tokens.onnx"
         sample = torch.randn(1, 3, input_size[0], input_size[1], dtype=torch.float32)
 
-        embedding_wrapper = _EmbeddingExportWrapper(self.module).eval()
-        patch_wrapper = _PatchTokenExportWrapper(self.module).eval()
+        embedding_wrapper, patch_wrapper = _build_export_wrappers(self.module, sample)
 
         torch.onnx.export(
             embedding_wrapper,
@@ -259,6 +260,48 @@ class _PatchTokenExportWrapper:
         return _Wrapped(module)
 
 
+class _FrozenRopeEmbeddingExportWrapper:
+    def __new__(cls, module, frozen_rope):
+        import torch
+
+        class _Wrapped(torch.nn.Module):
+            def __init__(self, wrapped_module, rope) -> None:
+                super().__init__()
+                self.module = wrapped_module
+                sin, cos = rope
+                self.register_buffer("rope_sin", sin)
+                self.register_buffer("rope_cos", cos)
+
+            def forward(self, pixel_values):
+                embedding, _ = _unpack_model_outputs(
+                    _forward_features_with_frozen_rope(self.module, pixel_values, (self.rope_sin, self.rope_cos))
+                )
+                return embedding
+
+        return _Wrapped(module, frozen_rope)
+
+
+class _FrozenRopePatchTokenExportWrapper:
+    def __new__(cls, module, frozen_rope):
+        import torch
+
+        class _Wrapped(torch.nn.Module):
+            def __init__(self, wrapped_module, rope) -> None:
+                super().__init__()
+                self.module = wrapped_module
+                sin, cos = rope
+                self.register_buffer("rope_sin", sin)
+                self.register_buffer("rope_cos", cos)
+
+            def forward(self, pixel_values):
+                _, patch_tokens = _unpack_model_outputs(
+                    _forward_features_with_frozen_rope(self.module, pixel_values, (self.rope_sin, self.rope_cos))
+                )
+                return patch_tokens
+
+        return _Wrapped(module, frozen_rope)
+
+
 def _build_default_session(config: ModelConfig) -> InferenceSession:
     if config.provider == "statistics":
         return StatisticsFeatureSession()
@@ -279,16 +322,63 @@ def _load_huggingface_session(config: ModelConfig) -> TorchModuleSession:
 def _load_torchhub_session(config: ModelConfig) -> TorchModuleSession:
     import torch
 
+    _ensure_torch_amp_compat(torch)
     repo_dir = _resolve_repo_dir(config)
     weights_path = _resolve_weights_path(config)
     hub_name = _resolve_torchhub_entry(config.model_name)
-    module = torch.hub.load(
-        str(repo_dir),
-        hub_name,
-        source="local",
-        weights=str(weights_path),
-    )
+    module = _load_dinov3_backbone(repo_dir, hub_name, str(weights_path), torch)
     return TorchModuleSession(module=module, device=config.device)
+
+
+def _ensure_torch_amp_compat(torch_module) -> None:
+    amp_module = getattr(torch_module, "amp", None)
+    cuda_amp_module = getattr(getattr(torch_module, "cuda", None), "amp", None)
+    if amp_module is None or cuda_amp_module is None:
+        return
+    if not hasattr(amp_module, "custom_fwd") and hasattr(cuda_amp_module, "custom_fwd"):
+        legacy_custom_fwd = cuda_amp_module.custom_fwd
+
+        def custom_fwd(func=None, *, device_type=None, cast_inputs=None):
+            _ = device_type
+            return legacy_custom_fwd(func, cast_inputs=cast_inputs)
+
+        amp_module.custom_fwd = custom_fwd
+    if not hasattr(amp_module, "custom_bwd") and hasattr(cuda_amp_module, "custom_bwd"):
+        legacy_custom_bwd = cuda_amp_module.custom_bwd
+
+        def custom_bwd(func=None, *, device_type=None):
+            _ = device_type
+            if func is None:
+                return lambda wrapped: legacy_custom_bwd(wrapped)
+            return legacy_custom_bwd(func)
+
+        amp_module.custom_bwd = custom_bwd
+
+
+def _load_dinov3_backbone(repo_dir: Path, hub_name: str, weights_path: str, torch_module):
+    repo_dir = repo_dir.resolve()
+    repo_path = str(repo_dir)
+    added_path = False
+    if repo_path not in sys.path:
+        sys.path.insert(0, repo_path)
+        added_path = True
+    try:
+        backbones = importlib.import_module("dinov3.hub.backbones")
+        factory = getattr(backbones, hub_name)
+        return factory(weights=weights_path)
+    except Exception:
+        hub_load = getattr(getattr(torch_module, "hub", None), "load", None)
+        if hub_load is None:
+            raise
+        return hub_load(
+            str(repo_dir),
+            hub_name,
+            source="local",
+            weights=weights_path,
+        )
+    finally:
+        if added_path and repo_path in sys.path:
+            sys.path.remove(repo_path)
 
 
 def _resolve_repo_dir(config: ModelConfig) -> Path:
@@ -352,6 +442,60 @@ def _run_feature_forward(module, pixel_values):
     return module(pixel_values)
 
 
+def _build_export_wrappers(module, sample):
+    if _supports_frozen_rope_export(module):
+        frozen_rope = _precompute_frozen_rope(module, sample)
+        return (
+            _FrozenRopeEmbeddingExportWrapper(module, frozen_rope).eval(),
+            _FrozenRopePatchTokenExportWrapper(module, frozen_rope).eval(),
+        )
+    return _EmbeddingExportWrapper(module).eval(), _PatchTokenExportWrapper(module).eval()
+
+
+def _supports_frozen_rope_export(module) -> bool:
+    return (
+        getattr(module, "rope_embed", None) is not None
+        and hasattr(module, "prepare_tokens_with_masks")
+        and hasattr(module, "blocks")
+        and hasattr(module, "norm")
+        and hasattr(module, "n_storage_tokens")
+    )
+
+
+def _precompute_frozen_rope(module, sample):
+    import torch
+
+    module.eval()
+    with torch.no_grad():
+        _, (height, width) = module.prepare_tokens_with_masks(sample)
+        return module.rope_embed(H=height, W=width)
+
+
+def _forward_features_with_frozen_rope(module, pixel_values, rope):
+    x, _ = module.prepare_tokens_with_masks(pixel_values)
+    for block in module.blocks:
+        x = block(x, rope)
+
+    if getattr(module, "untie_cls_and_patch_norms", False) or getattr(module, "untie_global_and_local_cls_norm", False):
+        if getattr(module, "untie_cls_and_patch_norms", False):
+            x_norm_cls_reg = module.cls_norm(x[:, : module.n_storage_tokens + 1])
+        else:
+            x_norm_cls_reg = module.norm(x[:, : module.n_storage_tokens + 1])
+        x_norm_patch = module.norm(x[:, module.n_storage_tokens + 1 :])
+    else:
+        x_norm = module.norm(x)
+        x_norm_cls_reg = x_norm[:, : module.n_storage_tokens + 1]
+        x_norm_patch = x_norm[:, module.n_storage_tokens + 1 :]
+
+    return {
+        "x_norm_clstoken": x_norm_cls_reg[:, 0],
+        "x_storage_tokens": x_norm_cls_reg[:, 1:],
+        "x_norm_patchtokens": x_norm_patch,
+        "x_prenorm": x,
+        "masks": None,
+    }
+
+
 def _validate_onnx_export(
     module,
     input_size: tuple[int, int],
@@ -367,6 +511,18 @@ def _validate_onnx_export(
             "embedding_metrics": None,
             "patch_tokens_metrics": None,
             "notes": ["validation_skipped:user_request"],
+        }
+
+    unsupported_ops = sorted(
+        set(_find_unsupported_onnx_ops(embedding_path) + _find_unsupported_onnx_ops(patch_tokens_path))
+    )
+    if unsupported_ops:
+        return {
+            "validation_status": "failed",
+            "validated_batches": [],
+            "embedding_metrics": None,
+            "patch_tokens_metrics": None,
+            "notes": [f"unsupported_control_flow:{op}" for op in unsupported_ops],
         }
 
     try:
@@ -426,3 +582,13 @@ def _summarize_error_metrics(metrics: list[tuple[float, float]]) -> dict[str, fl
         "max_abs_err": max(metric[0] for metric in metrics),
         "mean_abs_err": max(metric[1] for metric in metrics),
     }
+
+
+def _find_unsupported_onnx_ops(path: Path) -> list[str]:
+    try:
+        import onnx
+    except ModuleNotFoundError:
+        return []
+
+    model = onnx.load(str(path))
+    return sorted({node.op_type for node in model.graph.node if node.op_type == "If"})
