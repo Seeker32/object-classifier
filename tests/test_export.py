@@ -10,8 +10,10 @@ import numpy as np
 from object_classifier.config import ModelConfig, ROIBox
 from object_classifier.export import attempt_rknn_conversion, export_onnx_artifacts
 from object_classifier.features import (
+    TorchModuleSession,
     PyTorchFeatureBackend,
     StatisticsFeatureSession,
+    _validate_onnx_export,
     _find_unsupported_onnx_ops,
     _forward_features_with_frozen_rope,
 )
@@ -61,6 +63,146 @@ def test_export_onnx_artifacts_uses_backend_exporter(tmp_path) -> None:
     assert report["validated_batches"] == [1, 2]
     assert report["embedding_metrics"] == {"max_abs_err": 1e-6, "mean_abs_err": 1e-7}
     assert report["patch_tokens_metrics"] == {"max_abs_err": 2e-6, "mean_abs_err": 2e-7}
+
+
+def test_torch_module_session_exports_static_batch_onnx(tmp_path, monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeTensor:
+        def __init__(self, shape: tuple[int, ...]):
+            self.shape = shape
+
+    class FakeModule:
+        def eval(self):
+            return self
+
+    class FakeNoGrad:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_export(model, sample, path, **kwargs):
+        captured.append({"path": str(path), "sample_shape": sample.shape, "kwargs": kwargs})
+
+    fake_torch = SimpleNamespace(
+        float32="float32",
+        nn=SimpleNamespace(Module=object),
+        randn=lambda *shape, dtype=None: FakeTensor(shape),
+        onnx=SimpleNamespace(export=fake_export),
+        no_grad=lambda: FakeNoGrad(),
+    )
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "object_classifier.features._build_export_wrappers",
+        lambda module, sample: ("embedding-wrapper", "patch-wrapper"),
+    )
+    monkeypatch.setattr(
+        "object_classifier.features._validate_onnx_export",
+        lambda **kwargs: {
+            "validation_status": "passed",
+            "validated_batches": [1],
+            "embedding_metrics": {"max_abs_err": 0.0, "mean_abs_err": 0.0},
+            "patch_tokens_metrics": {"max_abs_err": 0.0, "mean_abs_err": 0.0},
+            "notes": ["validation_passed"],
+        },
+    )
+
+    session = TorchModuleSession(FakeModule())
+    payload = session.export_onnx(tmp_path, (224, 224), validate=True)
+
+    assert payload["status"] == "ready"
+    assert payload["validated_batches"] == [1]
+    assert len(captured) == 2
+    for export_call in captured:
+        assert export_call["sample_shape"] == (1, 3, 224, 224)
+        assert "dynamic_axes" not in export_call["kwargs"]
+
+
+def test_validate_onnx_export_uses_static_batch_only(monkeypatch, tmp_path) -> None:
+    captured_batch_sizes: list[int] = []
+
+    class FakeTorchTensor:
+        def __init__(self, array: np.ndarray):
+            self.array = array
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.array
+
+    class FakeNoGrad:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def __init__(self, path: str, providers: list[str]):
+            self.path = path
+            self.providers = providers
+
+        def run(self, _, ort_inputs):
+            batch = ort_inputs["pixel_values"]
+            captured_batch_sizes.append(int(batch.shape[0]))
+            if self.path.endswith("embedding.onnx"):
+                return [batch.mean(axis=(2, 3))]
+            return [batch.reshape(batch.shape[0], batch.shape[1], -1).transpose(0, 2, 1)]
+
+    class FakeEmbeddingWrapper:
+        def eval(self):
+            return self
+
+        def __call__(self, sample):
+            return FakeTorchTensor(sample.array.mean(axis=(2, 3)))
+
+    class FakePatchWrapper:
+        def eval(self):
+            return self
+
+        def __call__(self, sample):
+            return FakeTorchTensor(sample.array.reshape(sample.array.shape[0], sample.array.shape[1], -1).transpose(0, 2, 1))
+
+    class FakeModule:
+        def eval(self):
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            float32="float32",
+            randn=lambda *shape, dtype=None: FakeTorchTensor(np.ones(shape, dtype=np.float32)),
+            no_grad=lambda: FakeNoGrad(),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(InferenceSession=FakeSession),
+    )
+    monkeypatch.setattr("object_classifier.features._find_unsupported_onnx_ops", lambda path: [])
+    monkeypatch.setattr("object_classifier.features._EmbeddingExportWrapper", lambda module: FakeEmbeddingWrapper())
+    monkeypatch.setattr("object_classifier.features._PatchTokenExportWrapper", lambda module: FakePatchWrapper())
+
+    result = _validate_onnx_export(
+        module=FakeModule(),
+        input_size=(224, 224),
+        embedding_path=tmp_path / "embedding.onnx",
+        patch_tokens_path=tmp_path / "patch_tokens.onnx",
+        enabled=True,
+    )
+
+    assert result["validation_status"] == "passed"
+    assert result["validated_batches"] == [1]
+    assert captured_batch_sizes == [1, 1]
 
 
 def test_attempt_rknn_conversion_uses_resolved_input_size_for_symbolic_batch(tmp_path, monkeypatch) -> None:
