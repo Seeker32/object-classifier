@@ -73,8 +73,8 @@ def test_attempt_rknn_conversion_uses_resolved_input_size_for_symbolic_batch(tmp
         def __init__(self, verbose: bool):
             captured["verbose"] = verbose
 
-        def config(self, *, target_platform: str, dynamic_input: list[list[list[int]]]):
-            captured["config"] = {"target_platform": target_platform, "dynamic_input": dynamic_input}
+        def config(self, *, target_platform: str):
+            captured["config"] = {"target_platform": target_platform}
 
         def load_onnx(self, *, model: str, input_size_list: list[list[int]]):
             captured["load_onnx"] = {"model": model, "input_size_list": input_size_list}
@@ -119,10 +119,9 @@ def test_attempt_rknn_conversion_uses_resolved_input_size_for_symbolic_batch(tmp
     assert report["status"] == "ready"
     assert report["rknn_path"] == str(output_dir / "embedding.rknn")
     assert report["input_size_list"] == [[1, 3, 224, 224]]
-    assert report["dynamic_input"] == [[[1, 3, 224, 224]]]
+    assert report["dynamic_input"] is None
     assert captured["config"] == {
         "target_platform": "rk3588",
-        "dynamic_input": [[[1, 3, 224, 224]]],
     }
     assert captured["load_onnx"] == {
         "model": str(onnx_path),
@@ -141,8 +140,8 @@ def test_attempt_rknn_conversion_falls_back_to_default_input_size_when_onnx_miss
         def __init__(self, verbose: bool):
             pass
 
-        def config(self, *, target_platform: str, dynamic_input: list[list[list[int]]]):
-            self.dynamic_input = dynamic_input
+        def config(self, *, target_platform: str):
+            self.target_platform = target_platform
 
         def load_onnx(self, *, model: str, input_size_list: list[list[int]]):
             self.input_size_list = input_size_list
@@ -165,7 +164,7 @@ def test_attempt_rknn_conversion_falls_back_to_default_input_size_when_onnx_miss
 
     assert report["status"] == "ready"
     assert report["input_size_list"] == [[1, 3, 224, 224]]
-    assert report["dynamic_input"] == [[[1, 3, 224, 224]]]
+    assert report["dynamic_input"] is None
 
 
 def test_forward_features_with_frozen_rope_uses_precomputed_rope() -> None:
