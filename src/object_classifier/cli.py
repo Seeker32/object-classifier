@@ -5,10 +5,9 @@ import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
-from .config import FeatureCacheConfig, PipelineConfig, StorageConfig, default_config
 from .export import export_onnx_artifacts
-from .features import create_backend
-from .pipeline import ObjectClassifierPipeline
+from .runtime import build_pipeline
+from .web import create_app
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,40 +39,24 @@ def build_parser() -> argparse.ArgumentParser:
     export = subparsers.add_parser("export")
     export.add_argument("--output-dir", default="data/object-classifier/export")
 
+    serve = subparsers.add_parser("serve")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+
     return parser
 
 
-def build_config(args: argparse.Namespace) -> PipelineConfig:
-    base = default_config()
-    cache_dir = Path(args.cache_dir) if args.cache_dir else Path(args.storage_root) / "cache"
-    return PipelineConfig(
-        model=base.model.__class__(
-            backend=args.backend,
-            provider=args.provider,
-            input_size=base.model.input_size,
-            roi_box=base.model.roi_box,
-            model_name=args.model_id or base.model.model_name,
-            embedding_dim=base.model.embedding_dim,
-            device=args.device,
-            repo_dir=Path(args.repo_dir) if args.repo_dir else None,
-            weights_dir=Path(args.weights_dir) if args.weights_dir else None,
-        ),
-        quality=base.quality,
-        decision=base.decision,
-        storage=StorageConfig(root=Path(args.storage_root)),
-        cache=FeatureCacheConfig(enabled=True, cache_dir=cache_dir),
-        topk=base.topk,
-    )
-
-
-def build_pipeline(args: argparse.Namespace) -> ObjectClassifierPipeline:
-    config = build_config(args)
-    backend = create_backend(args.backend, config.model)
-    return ObjectClassifierPipeline(config=config, backend=backend)
-
-
 def handle_register(args: argparse.Namespace) -> int:
-    pipeline = build_pipeline(args)
+    pipeline = build_pipeline(
+        storage_root=args.storage_root,
+        cache_dir=args.cache_dir,
+        backend=args.backend,
+        provider=args.provider,
+        model_id=args.model_id,
+        device=args.device,
+        repo_dir=args.repo_dir,
+        weights_dir=args.weights_dir,
+    )
     result = pipeline.register(args.sku_name, [Path(image) for image in args.images])
     payload = {
         "decision": result.decision,
@@ -88,14 +71,32 @@ def handle_register(args: argparse.Namespace) -> int:
 
 
 def handle_identify(args: argparse.Namespace) -> int:
-    pipeline = build_pipeline(args)
+    pipeline = build_pipeline(
+        storage_root=args.storage_root,
+        cache_dir=args.cache_dir,
+        backend=args.backend,
+        provider=args.provider,
+        model_id=args.model_id,
+        device=args.device,
+        repo_dir=args.repo_dir,
+        weights_dir=args.weights_dir,
+    )
     result = pipeline.identify(Path(args.image))
     print(json.dumps(_to_jsonable(result)))
     return 0
 
 
 def handle_review_confirm(args: argparse.Namespace) -> int:
-    pipeline = build_pipeline(args)
+    pipeline = build_pipeline(
+        storage_root=args.storage_root,
+        cache_dir=args.cache_dir,
+        backend=args.backend,
+        provider=args.provider,
+        model_id=args.model_id,
+        device=args.device,
+        repo_dir=args.repo_dir,
+        weights_dir=args.weights_dir,
+    )
     result = pipeline.confirm_review(
         review_id=args.review_id,
         action=args.action,
@@ -113,6 +114,23 @@ def handle_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    app = create_app(
+        storage_root=args.storage_root,
+        cache_dir=args.cache_dir,
+        backend=args.backend,
+        provider=args.provider,
+        model_id=args.model_id,
+        device=args.device,
+        repo_dir=args.repo_dir,
+        weights_dir=args.weights_dir,
+    )
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -121,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         "identify": handle_identify,
         "review-confirm": handle_review_confirm,
         "export": handle_export,
+        "serve": handle_serve,
     }
     return handlers[args.command](args)
 

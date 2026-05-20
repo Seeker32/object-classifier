@@ -48,3 +48,13 @@ def test_cli_export_writes_report(tmp_path, capsys) -> None:
 
     assert Path(payload["report_path"]).exists()
     assert payload["status"] in {"ready", "blocked"}
+
+
+def test_cli_supports_serve_command() -> None:
+    from object_classifier.cli import build_parser
+
+    args = build_parser().parse_args(["serve", "--host", "127.0.0.1", "--port", "9000"])
+
+    assert args.command == "serve"
+    assert args.host == "127.0.0.1"
+    assert args.port == 9000
