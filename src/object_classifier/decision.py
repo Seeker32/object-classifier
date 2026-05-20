@@ -72,6 +72,30 @@ def decide_top_candidate(
     )
 
 
+def decide_registration_candidate(
+    candidates: list[Candidate],
+    thresholds: DecisionThresholds,
+) -> tuple[str, list[str]]:
+    ordered = sorted(candidates, key=_candidate_score, reverse=True)
+    if not ordered:
+        return "safe_create", ["no_close_candidates"]
+
+    top1 = ordered[0]
+    top2 = ordered[1] if len(ordered) > 1 else None
+    top1_score = _candidate_score(top1)
+    top2_score = _candidate_score(top2) if top2 else 0.0
+    margin = top1_score - top2_score if top2 else 1.0
+
+    if (
+        top1_score < thresholds.registration_duplicate_score
+        or top1.global_score < thresholds.registration_global_score
+    ):
+        return "safe_create", ["below_duplicate_threshold"]
+    if top2 and margin < thresholds.registration_ambiguous_margin:
+        return "manual_block", ["duplicate_match_is_ambiguous"]
+    return "possible_duplicate", ["close_to_existing_sku"]
+
+
 def _candidate_score(candidate: Candidate | None) -> float:
     if candidate is None:
         return 0.0

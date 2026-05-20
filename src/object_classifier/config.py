@@ -34,6 +34,9 @@ class QualityThresholds:
 class DecisionThresholds:
     absolute_score: float = 0.78
     margin_score: float = 0.05
+    registration_duplicate_score: float = 0.9
+    registration_global_score: float = 0.8
+    registration_ambiguous_margin: float = 0.03
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class StorageConfig:
     patch_token_dir: str = "patch_tokens"
     faiss_index_file: str = "index.faiss"
     faiss_mapping_file: str = "index_mapping.json"
+    database_file: str = "metadata.sqlite3"
 
     @property
     def metadata_root(self) -> Path:
@@ -56,6 +60,10 @@ class StorageConfig:
     @property
     def patch_token_root(self) -> Path:
         return self.root / self.patch_token_dir
+
+    @property
+    def database_path(self) -> Path:
+        return self.root / self.database_file
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,8 @@ class ModelConfig:
     device: str = "cpu"
     repo_dir: Path | None = None
     weights_dir: Path | None = None
+    rknn_embedding_path: Path | None = None
+    rknn_patch_tokens_path: Path | None = None
 
 
 @dataclass(frozen=True)
