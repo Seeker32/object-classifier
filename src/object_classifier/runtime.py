@@ -17,6 +17,7 @@ def build_pipeline(
     device: str = "cpu",
     repo_dir: str | Path | None = None,
     weights_dir: str | Path | None = None,
+    rknn_target: str = "rk3588",
 ) -> ObjectClassifierPipeline:
     config = build_config(
         storage_root=storage_root,
@@ -27,6 +28,7 @@ def build_pipeline(
         device=device,
         repo_dir=repo_dir,
         weights_dir=weights_dir,
+        rknn_target=rknn_target,
     )
     active_backend = create_backend(backend, config.model)
     return ObjectClassifierPipeline(config=config, backend=active_backend)
@@ -42,6 +44,7 @@ def build_config(
     device: str = "cpu",
     repo_dir: str | Path | None = None,
     weights_dir: str | Path | None = None,
+    rknn_target: str = "rk3588",
 ) -> PipelineConfig:
     base = default_config()
     storage_root_path = Path(storage_root)
@@ -57,6 +60,7 @@ def build_config(
             device=device,
             repo_dir=Path(repo_dir) if repo_dir else None,
             weights_dir=Path(weights_dir) if weights_dir else None,
+            rknn_target=rknn_target,
         ),
         quality=base.quality,
         decision=base.decision,

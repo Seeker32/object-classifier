@@ -123,6 +123,7 @@ class ModelConfig:
     device: str = "cpu"
     repo_dir: Path | None = None
     weights_dir: Path | None = None
+    rknn_target: str = "rk3588"
     rknn_embedding_path: Path | None = None
     rknn_patch_tokens_path: Path | None = None
 

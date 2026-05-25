@@ -30,6 +30,27 @@ class FakeRKNNLite:
         return None
 
 
+class FakeRKNNLiteWithTarget:
+    last_init_target: str | None = None
+
+    def __init__(self) -> None:
+        self.loaded: str | None = None
+
+    def load_rknn(self, path: str) -> int:
+        self.loaded = path
+        return 0
+
+    def init_runtime(self, *, target: str) -> int:
+        self.__class__.last_init_target = target
+        return 0
+
+    def inference(self, inputs: list[np.ndarray]) -> list[np.ndarray]:
+        batch = inputs[0]
+        embedding = batch.mean(axis=(2, 3))
+        patch_tokens = batch.reshape(batch.shape[0], batch.shape[1], -1).transpose(0, 2, 1)
+        return [embedding.astype(np.float32), patch_tokens.astype(np.float32)]
+
+
 def test_rknn_runtime_session_satisfies_backend_contract(tmp_path) -> None:
     artifact = tmp_path / "embedding.rknn"
     artifact.write_bytes(b"fake")
@@ -80,3 +101,19 @@ def test_rknn_runtime_session_can_fallback_to_embedding_only(tmp_path) -> None:
 
     assert embedding.shape == (3,)
     assert patch_tokens.shape[1] == 3
+
+
+def test_rknn_runtime_session_passes_target_to_init_runtime(tmp_path) -> None:
+    artifact = tmp_path / "embedding.rknn"
+    artifact.write_bytes(b"fake")
+    FakeRKNNLiteWithTarget.last_init_target = None
+    session = RKNNRuntimeSession(
+        embedding_model_path=artifact,
+        patch_model_path=None,
+        runtime_factory=FakeRKNNLiteWithTarget,
+        target="rk3576",
+    )
+
+    session.infer(np.ones((1, 3, 16, 16), dtype=np.float32))
+
+    assert FakeRKNNLiteWithTarget.last_init_target == "rk3576"

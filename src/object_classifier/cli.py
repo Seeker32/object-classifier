@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--repo-dir", default=None)
     parser.add_argument("--weights-dir", default=None)
+    parser.add_argument("--rknn-target", default="rk3588")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     register = subparsers.add_parser("register")
@@ -55,6 +56,7 @@ def handle_register(args: argparse.Namespace) -> int:
         device=args.device,
         repo_dir=args.repo_dir,
         weights_dir=args.weights_dir,
+        rknn_target=args.rknn_target,
     )
     result = pipeline.register(args.sku_name, [Path(image) for image in args.images])
     payload = {
@@ -79,6 +81,7 @@ def handle_identify(args: argparse.Namespace) -> int:
         device=args.device,
         repo_dir=args.repo_dir,
         weights_dir=args.weights_dir,
+        rknn_target=args.rknn_target,
     )
     result = pipeline.identify(Path(args.image))
     print(json.dumps(_to_jsonable(result)))
@@ -160,6 +163,7 @@ def handle_serve(args: argparse.Namespace) -> int:
         device=args.device,
         repo_dir=args.repo_dir,
         weights_dir=args.weights_dir,
+        rknn_target=args.rknn_target,
     )
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

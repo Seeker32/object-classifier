@@ -135,3 +135,47 @@ def test_cli_parser_supports_reset_command() -> None:
 
     assert args.command == "reset"
     assert args.yes is True
+
+
+def test_cli_identify_passes_rknn_target_to_pipeline(monkeypatch, tmp_path, capsys) -> None:
+    query = tmp_path / "query.png"
+    write_pattern_image(query, (210, 50, 40))
+    captured: dict[str, object] = {}
+
+    class FakePipeline:
+        def identify(self, image_path: Path):
+            captured["image_path"] = image_path
+            return {
+                "decision": "auto_accept",
+                "status": "matched",
+                "sku_id": "sku-000001",
+                "reasons": [],
+                "top_candidate": None,
+                "candidates": [],
+                "metadata": {},
+            }
+
+    def fake_build_pipeline(**kwargs):
+        captured["kwargs"] = kwargs
+        return FakePipeline()
+
+    monkeypatch.setattr("object_classifier.cli.build_pipeline", fake_build_pipeline)
+
+    assert (
+        main(
+            [
+                "--backend",
+                "rknn",
+                "--rknn-target",
+                "rk3576",
+                "identify",
+                str(query),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["decision"] == "auto_accept"
+    assert captured["kwargs"]["backend"] == "rknn"
+    assert captured["kwargs"]["rknn_target"] == "rk3576"

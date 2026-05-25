@@ -154,10 +154,12 @@ class RKNNRuntimeSession:
         patch_model_path: Path | None,
         *,
         runtime_factory=None,
+        target: str = "rk3588",
     ) -> None:
         self.embedding_model_path = Path(embedding_model_path)
         self.patch_model_path = Path(patch_model_path) if patch_model_path is not None else None
         self.runtime_factory = runtime_factory
+        self.target = target
         self._embedding_runtime = None
         self._patch_runtime = None
 
@@ -187,7 +189,10 @@ class RKNNRuntimeSession:
         load_status = runtime.load_rknn(str(model_path))
         if load_status != 0:
             raise RuntimeError(f"Failed to load RKNN artifact: {model_path}")
-        init_status = runtime.init_runtime()
+        try:
+            init_status = runtime.init_runtime(target=self.target)
+        except TypeError:
+            init_status = runtime.init_runtime()
         if init_status != 0:
             raise RuntimeError(f"Failed to init RKNN runtime: {model_path}")
         return runtime
@@ -367,7 +372,11 @@ def _build_default_session(config: ModelConfig) -> InferenceSession:
         if patch_path is None:
             candidate_patch = _resolve_default_rknn_path(config, "patch_tokens.rknn", required=False)
             patch_path = candidate_patch
-        return RKNNRuntimeSession(embedding_model_path=embedding_path, patch_model_path=patch_path)
+        return RKNNRuntimeSession(
+            embedding_model_path=embedding_path,
+            patch_model_path=patch_path,
+            target=config.rknn_target,
+        )
     if config.provider == "statistics":
         return StatisticsFeatureSession()
     if config.provider == "huggingface":

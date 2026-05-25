@@ -20,6 +20,7 @@ def create_app(
     device: str = "cpu",
     repo_dir: str | Path | None = None,
     weights_dir: str | Path | None = None,
+    rknn_target: str = "rk3588",
 ) -> FastAPI:
     app = FastAPI(title="Object Classifier")
     pipeline = build_pipeline(
@@ -31,6 +32,7 @@ def create_app(
         device=device,
         repo_dir=repo_dir,
         weights_dir=weights_dir,
+        rknn_target=rknn_target,
     )
 
     @app.get("/api/health")
