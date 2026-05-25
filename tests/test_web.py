@@ -71,9 +71,10 @@ def test_web_register_endpoint_accepts_multiple_images(tmp_path) -> None:
     payload = response.json()
 
     assert response.status_code == 200
-    assert payload["decision"] in {"safe_create", "possible_duplicate", "manual_block"}
-    assert payload["sample_ids"] or payload["review_id"]
-    assert payload["sku_name"] in {"Camera Widget", None}
+    assert payload["decision"] == "safe_create"
+    assert payload["sample_ids"]
+    assert payload["sku_name"] == "Camera Widget"
+    assert "review_id" not in payload
 
 
 def test_web_identify_returns_ranked_candidates(tmp_path) -> None:

@@ -30,6 +30,7 @@ def test_cli_register_and_identify(tmp_path, capsys) -> None:
     assert main(["--storage-root", str(storage_root), "register", "Red Widget", str(red)]) == 0
     register_payload = json.loads(capsys.readouterr().out)
     assert register_payload["sku_id"].startswith("sku-")
+    assert "review_id" not in register_payload
 
     assert main(["--storage-root", str(storage_root), "register", "Blue Widget", str(blue)]) == 0
     _ = capsys.readouterr()
@@ -58,3 +59,16 @@ def test_cli_supports_serve_command() -> None:
     assert args.command == "serve"
     assert args.host == "127.0.0.1"
     assert args.port == 9000
+
+
+def test_cli_parser_does_not_expose_review_confirm() -> None:
+    from object_classifier.cli import build_parser
+
+    parser = build_parser()
+
+    try:
+        parser.parse_args(["review-confirm", "review-000001", "bind_existing_sku"])
+    except SystemExit as exc:
+        assert exc.code != 0
+    else:
+        raise AssertionError("review-confirm command should not be available")

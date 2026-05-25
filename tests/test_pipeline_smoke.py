@@ -83,7 +83,7 @@ def test_pipeline_registers_and_identifies_auto_accept(tmp_path) -> None:
     assert result.sku_id == red_registration.sku.sku_id
 
 
-def test_pipeline_routes_ambiguous_queries_to_manual_review(tmp_path) -> None:
+def test_pipeline_returns_best_effort_for_ambiguous_queries(tmp_path) -> None:
     pipeline = build_pipeline(tmp_path)
     red = tmp_path / "red.png"
     green = tmp_path / "green.png"
@@ -96,6 +96,8 @@ def test_pipeline_routes_ambiguous_queries_to_manual_review(tmp_path) -> None:
     pipeline.register("Green Widget", [green])
     result = pipeline.identify(query)
 
-    assert result.decision == "manual_review"
+    assert result.decision == "best_effort"
+    assert result.status == "ambiguous"
+    assert result.sku_id is None
     assert len(result.candidates) >= 2
-    assert "manual_review" in result.metadata
+    assert "below_margin_threshold" in result.reasons

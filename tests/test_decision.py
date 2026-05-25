@@ -45,7 +45,7 @@ def test_decide_top_candidate_rejects_on_low_score() -> None:
         DecisionThresholds(absolute_score=0.8, margin_score=0.05),
     )
 
-    assert result.decision == "manual_review"
+    assert result.decision == "best_effort"
     assert "below_absolute_threshold" in result.reasons
 
 
@@ -60,5 +60,5 @@ def test_decide_top_candidate_rejects_on_small_margin() -> None:
         DecisionThresholds(absolute_score=0.8, margin_score=0.03),
     )
 
-    assert result.decision == "manual_review"
+    assert result.decision == "best_effort"
     assert "below_margin_threshold" in result.reasons

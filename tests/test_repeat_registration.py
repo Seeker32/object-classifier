@@ -79,10 +79,9 @@ def test_register_returns_safe_create_for_new_sku(tmp_path) -> None:
 
     assert result.decision == "safe_create"
     assert result.sku is not None
-    assert result.review_id is None
 
 
-def test_register_returns_possible_duplicate_when_query_is_close_to_existing_sku(tmp_path) -> None:
+def test_register_still_creates_sku_when_query_is_close_to_existing_sku(tmp_path) -> None:
     pipeline = build_pipeline(tmp_path)
     red = tmp_path / "red.png"
     near_red = tmp_path / "near-red.png"
@@ -93,14 +92,13 @@ def test_register_returns_possible_duplicate_when_query_is_close_to_existing_sku
     duplicate_attempt = pipeline.register("New Red Widget", [near_red])
 
     assert first.sku is not None
-    assert duplicate_attempt.decision == "possible_duplicate"
-    assert duplicate_attempt.sku is None
-    assert duplicate_attempt.review_id is not None
+    assert duplicate_attempt.decision == "safe_create"
+    assert duplicate_attempt.sku is not None
     assert duplicate_attempt.candidates
     assert duplicate_attempt.candidates[0].sku_id == first.sku.sku_id
 
 
-def test_register_returns_manual_block_when_query_is_close_to_multiple_skus(tmp_path) -> None:
+def test_register_still_creates_sku_when_query_is_close_to_multiple_skus(tmp_path) -> None:
     pipeline = build_pipeline(tmp_path)
     red = tmp_path / "red.png"
     blue = tmp_path / "blue.png"
@@ -113,7 +111,6 @@ def test_register_returns_manual_block_when_query_is_close_to_multiple_skus(tmp_
     pipeline.register("Blue Widget", [blue])
     result = pipeline.register("Unknown Widget", [ambiguous])
 
-    assert result.decision == "manual_block"
-    assert result.sku is None
-    assert result.review_id is not None
+    assert result.decision == "safe_create"
+    assert result.sku is not None
     assert len(result.candidates) >= 2
