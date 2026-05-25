@@ -51,6 +51,60 @@ def test_cli_export_writes_report(tmp_path, capsys) -> None:
     assert payload["status"] in {"ready", "blocked"}
 
 
+def test_cli_reset_requires_yes_flag(tmp_path, capsys) -> None:
+    storage_root = tmp_path / "store"
+    storage_root.mkdir(parents=True)
+    marker = storage_root / "metadata.sqlite3"
+    marker.write_text("db", encoding="utf-8")
+
+    assert main(["--storage-root", str(storage_root), "reset"]) == 1
+
+    assert marker.exists()
+    assert "--yes is required" in capsys.readouterr().err
+
+
+def test_cli_reset_removes_runtime_state_and_preserves_export(tmp_path, capsys) -> None:
+    storage_root = tmp_path / "store"
+    export_dir = storage_root / "export"
+    export_dir.mkdir(parents=True)
+    export_file = export_dir / "artifact.json"
+    export_file.write_text('{"ok": true}', encoding="utf-8")
+
+    (storage_root / "metadata.sqlite3").write_text("db", encoding="utf-8")
+    (storage_root / "index.faiss").write_text("index", encoding="utf-8")
+    (storage_root / "index_mapping.json").write_text("mapping", encoding="utf-8")
+    for dirname in ("metadata", "features", "patch_tokens", "cache"):
+        target = storage_root / dirname
+        target.mkdir()
+        (target / "stale.txt").write_text(dirname, encoding="utf-8")
+
+    assert main(["--storage-root", str(storage_root), "reset", "--yes"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "ok"
+    assert str(export_dir) in payload["preserved_paths"]
+    assert str(storage_root / "metadata.sqlite3") in payload["removed_paths"]
+    assert str(storage_root / "features") in payload["removed_paths"]
+    assert export_file.exists()
+    assert not (storage_root / "metadata.sqlite3").exists()
+    assert not (storage_root / "index.faiss").exists()
+    assert not (storage_root / "index_mapping.json").exists()
+    assert not (storage_root / "metadata").exists()
+    assert not (storage_root / "features").exists()
+    assert not (storage_root / "patch_tokens").exists()
+    assert not (storage_root / "cache").exists()
+
+
+def test_cli_reset_is_noop_for_missing_storage_root(tmp_path, capsys) -> None:
+    storage_root = tmp_path / "missing-store"
+
+    assert main(["--storage-root", str(storage_root), "reset", "--yes"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "noop"
+    assert payload["removed_paths"] == []
+
+
 def test_cli_supports_serve_command() -> None:
     from object_classifier.cli import build_parser
 
@@ -72,3 +126,12 @@ def test_cli_parser_does_not_expose_review_confirm() -> None:
         assert exc.code != 0
     else:
         raise AssertionError("review-confirm command should not be available")
+
+
+def test_cli_parser_supports_reset_command() -> None:
+    from object_classifier.cli import build_parser
+
+    args = build_parser().parse_args(["reset", "--yes"])
+
+    assert args.command == "reset"
+    assert args.yes is True

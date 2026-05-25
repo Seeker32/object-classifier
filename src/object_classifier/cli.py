@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
+from .config import StorageConfig
 from .export import export_onnx_artifacts
 from .runtime import build_pipeline
 from .web import create_app
@@ -31,6 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     export = subparsers.add_parser("export")
     export.add_argument("--output-dir", default="data/object-classifier/export")
+
+    reset = subparsers.add_parser("reset")
+    reset.add_argument("--yes", action="store_true")
 
     serve = subparsers.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
@@ -77,9 +83,68 @@ def handle_identify(args: argparse.Namespace) -> int:
     result = pipeline.identify(Path(args.image))
     print(json.dumps(_to_jsonable(result)))
     return 0
+
+
 def handle_export(args: argparse.Namespace) -> int:
     artifacts = export_onnx_artifacts(Path(args.output_dir))
     print(json.dumps(_to_jsonable(artifacts)))
+    return 0
+
+
+def handle_reset(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("reset is destructive; --yes is required", file=sys.stderr)
+        return 1
+
+    storage_root = Path(args.storage_root)
+    if not storage_root.exists():
+        print(
+            json.dumps(
+                {
+                    "status": "noop",
+                    "storage_root": str(storage_root),
+                    "preserved_paths": [],
+                    "removed_paths": [],
+                }
+            )
+        )
+        return 0
+
+    config = StorageConfig(root=storage_root)
+    preserved_paths: list[Path] = []
+    removed_paths: list[Path] = []
+    export_dir = storage_root / "export"
+    if export_dir.exists():
+        preserved_paths.append(export_dir)
+
+    removal_targets = [
+        config.database_path,
+        config.metadata_root,
+        config.feature_root,
+        config.patch_token_root,
+        storage_root / "cache",
+        storage_root / config.faiss_index_file,
+        storage_root / config.faiss_mapping_file,
+    ]
+    for target in removal_targets:
+        if not target.exists():
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        removed_paths.append(target)
+
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "storage_root": str(storage_root),
+                "preserved_paths": [str(path) for path in preserved_paths],
+                "removed_paths": [str(path) for path in removed_paths],
+            }
+        )
+    )
     return 0
 
 
@@ -107,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         "register": handle_register,
         "identify": handle_identify,
         "export": handle_export,
+        "reset": handle_reset,
         "serve": handle_serve,
     }
     return handlers[args.command](args)
