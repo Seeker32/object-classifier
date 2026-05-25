@@ -397,6 +397,10 @@ def _html_shell() -> str:
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || "Register failed.");
         showResult(payload);
+        skuNameInput.value = "";
+        state.sampleBlobs = [];
+        renderSamples();
+        resetCapture();
       } catch (error) {
         resultStatus.textContent = error.message;
         resultStatus.className = "status error";

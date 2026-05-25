@@ -46,6 +46,9 @@ def test_web_serves_single_page_shell(tmp_path) -> None:
     assert "text/html" in response.headers["content-type"]
     assert "Object Classifier" in response.text
     assert "navigator.mediaDevices.getUserMedia" in response.text
+    assert "skuNameInput.value = \"\";" in response.text
+    assert "state.sampleBlobs = [];" in response.text
+    assert "resetCapture();" in response.text
 
 
 def test_web_register_endpoint_accepts_multiple_images(tmp_path) -> None:
