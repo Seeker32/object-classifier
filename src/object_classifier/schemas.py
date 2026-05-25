@@ -74,7 +74,6 @@ class DecisionResult:
     top_candidate: Candidate | None
     candidates: list[Candidate]
     reasons: list[str]
-    review_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -99,53 +98,13 @@ class NormalizedROI:
 
 
 @dataclass(frozen=True)
-class ManualReviewPayload:
-    image_path: str
-    candidates: list[Candidate]
-    quality: QualityResult
-    review_type: str = "identify"
-    requested_actions: list[str] = field(default_factory=list)
-    query_metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class RegistrationResult:
     decision: str
     sku: SKU | None
     samples: list[Sample]
     warnings: list[str] = field(default_factory=list)
-    review_id: str | None = None
     candidates: list[Candidate] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ReviewRecord:
-    review_id: str
-    review_type: str
-    status: str
-    requested_actions: list[str]
-    image_paths: list[str]
-    candidates: list[Candidate]
-    quality: QualityResult | None = None
-    target_sku_name: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-    created_by: str = "system"
-    created_at: str = field(default_factory=utc_now)
-    resolved_by: str | None = None
-    resolved_at: str | None = None
-    resolution_action: str | None = None
-    resolution_payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ReviewConfirmationResult:
-    review_id: str
-    status: str
-    action: str
-    sku_id: str | None = None
-    sample_ids: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

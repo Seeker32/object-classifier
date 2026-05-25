@@ -68,7 +68,6 @@ def create_app(
             "sku_name": result.sku.sku_name if result.sku else None,
             "sample_ids": [sample.sample_id for sample in result.samples],
             "warnings": result.warnings,
-            "review_id": result.review_id,
             "reasons": result.reasons,
             "candidates": [_serialize_candidate(candidate, pipeline) for candidate in result.candidates],
         }
@@ -93,7 +92,6 @@ def create_app(
             "decision": result.decision,
             "status": result.status,
             "sku_id": result.sku_id,
-            "review_id": result.review_id,
             "reasons": result.reasons,
             "top_candidate": _serialize_candidate(result.top_candidate, pipeline) if result.top_candidate else None,
             "candidates": [_serialize_candidate(candidate, pipeline) for candidate in result.candidates],
@@ -380,8 +378,8 @@ def _html_shell() -> str:
       const pre = document.createElement("pre");
       pre.textContent = JSON.stringify(payload, null, 2);
       resultBox.appendChild(pre);
-      resultStatus.textContent = payload.review_id ? `Manual review: ${payload.review_id}` : "Request completed.";
-      resultStatus.className = payload.review_id ? "status warn" : "status";
+      resultStatus.textContent = payload.status || payload.decision || "Request completed.";
+      resultStatus.className = payload.decision === "best_effort" ? "status warn" : "status";
     }
 
     async function registerSamples() {

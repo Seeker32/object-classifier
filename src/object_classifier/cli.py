@@ -29,19 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     identify = subparsers.add_parser("identify")
     identify.add_argument("image")
 
-    review_confirm = subparsers.add_parser("review-confirm")
-    review_confirm.add_argument("review_id")
-    review_confirm.add_argument("action")
-    review_confirm.add_argument("--target-sku-id", default=None)
-    review_confirm.add_argument("--new-sku-name", default=None)
-    review_confirm.add_argument("--reviewer", default="system")
-
     export = subparsers.add_parser("export")
     export.add_argument("--output-dir", default="data/object-classifier/export")
 
     serve = subparsers.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--port", type=int, default=9000)
 
     return parser
 
@@ -64,7 +57,7 @@ def handle_register(args: argparse.Namespace) -> int:
         "sku_name": result.sku.sku_name if result.sku else None,
         "sample_ids": [sample.sample_id for sample in result.samples],
         "warnings": result.warnings,
-        "review_id": result.review_id,
+        "reasons": result.reasons,
     }
     print(json.dumps(payload))
     return 0
@@ -84,30 +77,6 @@ def handle_identify(args: argparse.Namespace) -> int:
     result = pipeline.identify(Path(args.image))
     print(json.dumps(_to_jsonable(result)))
     return 0
-
-
-def handle_review_confirm(args: argparse.Namespace) -> int:
-    pipeline = build_pipeline(
-        storage_root=args.storage_root,
-        cache_dir=args.cache_dir,
-        backend=args.backend,
-        provider=args.provider,
-        model_id=args.model_id,
-        device=args.device,
-        repo_dir=args.repo_dir,
-        weights_dir=args.weights_dir,
-    )
-    result = pipeline.confirm_review(
-        review_id=args.review_id,
-        action=args.action,
-        reviewer=args.reviewer,
-        target_sku_id=args.target_sku_id,
-        new_sku_name=args.new_sku_name,
-    )
-    print(json.dumps(_to_jsonable(result)))
-    return 0
-
-
 def handle_export(args: argparse.Namespace) -> int:
     artifacts = export_onnx_artifacts(Path(args.output_dir))
     print(json.dumps(_to_jsonable(artifacts)))
@@ -137,7 +106,6 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "register": handle_register,
         "identify": handle_identify,
-        "review-confirm": handle_review_confirm,
         "export": handle_export,
         "serve": handle_serve,
     }

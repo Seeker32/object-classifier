@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
 from .audit import (
-    AUDIT_EVENT_REVIEW_CONFIRMED,
-    AUDIT_EVENT_REVIEW_CREATED,
     AUDIT_EVENT_SAMPLE_ADDED,
     AUDIT_EVENT_SAMPLE_STATUS_CHANGED,
     AUDIT_EVENT_SKU_CREATED,
@@ -17,11 +14,9 @@ from .audit import (
 from .config import StorageConfig
 from .schemas import (
     AuditRecord,
-    Candidate,
     FeatureBundle,
     FeatureRecord,
     QualityResult,
-    ReviewRecord,
     SKU,
     Sample,
 )
@@ -238,103 +233,6 @@ class LocalRepository:
             raise KeyError(f"Unknown sample_id: {sample_id}")
         return self.load_feature_bundle(record)
 
-    def create_review(
-        self,
-        review_type: str,
-        requested_actions: list[str],
-        image_paths: list[str],
-        candidates: list[Candidate],
-        *,
-        created_by: str = "system",
-        quality: QualityResult | None = None,
-        target_sku_name: str | None = None,
-        metadata: dict | None = None,
-    ) -> ReviewRecord:
-        review = ReviewRecord(
-            review_id=self.generate_review_id(),
-            review_type=review_type,
-            status="pending",
-            requested_actions=list(requested_actions),
-            image_paths=list(image_paths),
-            candidates=list(candidates),
-            quality=quality,
-            target_sku_name=target_sku_name,
-            metadata=dict(metadata or {}),
-            created_by=created_by,
-        )
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO reviews (
-                    review_id, review_type, status, requested_actions, image_paths,
-                    candidates, quality, target_sku_name, metadata, created_by, created_at,
-                    resolved_by, resolved_at, resolution_action, resolution_payload
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    review.review_id,
-                    review.review_type,
-                    review.status,
-                    json.dumps(review.requested_actions),
-                    json.dumps(review.image_paths),
-                    json.dumps([asdict(candidate) for candidate in review.candidates]),
-                    json.dumps(asdict(review.quality)) if review.quality is not None else None,
-                    review.target_sku_name,
-                    json.dumps(review.metadata),
-                    review.created_by,
-                    review.created_at,
-                    review.resolved_by,
-                    review.resolved_at,
-                    review.resolution_action,
-                    json.dumps(review.resolution_payload),
-                ),
-            )
-            self._insert_audit(
-                conn,
-                event_type=AUDIT_EVENT_REVIEW_CREATED,
-                entity_type="review",
-                entity_id=review.review_id,
-                actor=created_by,
-                payload={"review_type": review_type, "requested_actions": requested_actions},
-            )
-        return review
-
-    def get_review(self, review_id: str) -> ReviewRecord | None:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM reviews WHERE review_id = ?", (review_id,)).fetchone()
-        return self._review_from_row(row) if row else None
-
-    def confirm_review(
-        self,
-        review_id: str,
-        *,
-        actor: str,
-        action: str,
-        resolution_payload: dict | None = None,
-    ) -> ReviewRecord:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE reviews
-                SET status = ?, resolved_by = ?, resolved_at = CURRENT_TIMESTAMP,
-                    resolution_action = ?, resolution_payload = ?
-                WHERE review_id = ?
-                """,
-                ("approved", actor, action, json.dumps(resolution_payload or {}), review_id),
-            )
-            self._insert_audit(
-                conn,
-                event_type=AUDIT_EVENT_REVIEW_CONFIRMED,
-                entity_type="review",
-                entity_id=review_id,
-                actor=actor,
-                payload={"action": action, "resolution_payload": resolution_payload or {}},
-            )
-            row = conn.execute("SELECT * FROM reviews WHERE review_id = ?", (review_id,)).fetchone()
-        if row is None:
-            raise KeyError(f"Unknown review_id: {review_id}")
-        return self._review_from_row(row)
-
     def list_audit_records(self) -> list[AuditRecord]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM audits ORDER BY audit_id").fetchall()
@@ -349,11 +247,6 @@ class LocalRepository:
         with self._connect() as conn:
             count = conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0] + 1
         return f"sample-{count:06d}"
-
-    def generate_review_id(self) -> str:
-        with self._connect() as conn:
-            count = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0] + 1
-        return f"review-{count:06d}"
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -395,23 +288,6 @@ class LocalRepository:
                     patch_token_path TEXT NOT NULL,
                     backend TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS reviews (
-                    review_id TEXT PRIMARY KEY,
-                    review_type TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    requested_actions TEXT NOT NULL,
-                    image_paths TEXT NOT NULL,
-                    candidates TEXT NOT NULL,
-                    quality TEXT,
-                    target_sku_name TEXT,
-                    metadata TEXT NOT NULL,
-                    created_by TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    resolved_by TEXT,
-                    resolved_at TEXT,
-                    resolution_action TEXT,
-                    resolution_payload TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS audits (
                     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
@@ -450,28 +326,6 @@ class LocalRepository:
         payload["roi_points"] = tuple(tuple(point) for point in json.loads(payload["roi_box"]))
         payload.pop("roi_box")
         return Sample(**payload)
-
-    def _review_from_row(self, row: sqlite3.Row) -> ReviewRecord:
-        payload = dict(row)
-        candidates = [Candidate(**item) for item in json.loads(payload["candidates"])]
-        quality = payload["quality"]
-        return ReviewRecord(
-            review_id=payload["review_id"],
-            review_type=payload["review_type"],
-            status=payload["status"],
-            requested_actions=json.loads(payload["requested_actions"]),
-            image_paths=json.loads(payload["image_paths"]),
-            candidates=candidates,
-            quality=QualityResult(**json.loads(quality)) if quality else None,
-            target_sku_name=payload["target_sku_name"],
-            metadata=json.loads(payload["metadata"]),
-            created_by=payload["created_by"],
-            created_at=payload["created_at"],
-            resolved_by=payload["resolved_by"],
-            resolved_at=payload["resolved_at"],
-            resolution_action=payload["resolution_action"],
-            resolution_payload=json.loads(payload["resolution_payload"]),
-        )
 
     def _audit_from_row(self, row: sqlite3.Row) -> AuditRecord:
         payload = dict(row)

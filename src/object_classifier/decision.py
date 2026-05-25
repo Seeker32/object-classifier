@@ -34,8 +34,8 @@ def decide_top_candidate(
     ordered = sorted(candidates, key=_candidate_score, reverse=True)
     if not ordered:
         return DecisionResult(
-            decision="manual_review",
-            status="manual_review",
+            decision="best_effort",
+            status="not_found",
             sku_id=None,
             top_candidate=None,
             candidates=[],
@@ -49,17 +49,20 @@ def decide_top_candidate(
     margin = top1_score - top2_score if top2 else 1.0
     reasons: list[str] = []
     decision = "auto_accept"
+    status = "accepted"
 
     if top1_score < thresholds.absolute_score:
-        decision = "manual_review"
+        decision = "best_effort"
+        status = "low_confidence"
         reasons.append("below_absolute_threshold")
     elif top2 and margin < thresholds.margin_score:
-        decision = "manual_review"
+        decision = "best_effort"
+        status = "ambiguous"
         reasons.append("below_margin_threshold")
 
     return DecisionResult(
         decision=decision,
-        status=decision,
+        status=status,
         sku_id=top1.sku_id if decision == "auto_accept" else None,
         top_candidate=top1,
         candidates=ordered,
@@ -75,10 +78,10 @@ def decide_top_candidate(
 def decide_registration_candidate(
     candidates: list[Candidate],
     thresholds: DecisionThresholds,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     ordered = sorted(candidates, key=_candidate_score, reverse=True)
     if not ordered:
-        return "safe_create", ["no_close_candidates"]
+        return ["no_close_candidates"]
 
     top1 = ordered[0]
     top2 = ordered[1] if len(ordered) > 1 else None
@@ -90,10 +93,10 @@ def decide_registration_candidate(
         top1_score < thresholds.registration_duplicate_score
         or top1.global_score < thresholds.registration_global_score
     ):
-        return "safe_create", ["below_duplicate_threshold"]
+        return ["below_duplicate_threshold"]
     if top2 and margin < thresholds.registration_ambiguous_margin:
-        return "manual_block", ["duplicate_match_is_ambiguous"]
-    return "possible_duplicate", ["close_to_existing_sku"]
+        return ["duplicate_match_is_ambiguous"]
+    return ["close_to_existing_sku"]
 
 
 def _candidate_score(candidate: Candidate | None) -> float:
